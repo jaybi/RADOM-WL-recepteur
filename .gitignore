@@ -1,0 +1,10 @@
+.pio
+.pioenvs
+.piolibdeps
+.clang_complete
+.gcc-flags.json
+.travis.yml
+/lib/PersonalData/
+/lib/AT24C32_TEST/Examples/
+/test/
+.DS_Store
