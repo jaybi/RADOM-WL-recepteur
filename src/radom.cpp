@@ -2,16 +2,11 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include <String.h>
-//Installer les librairies Adafruit Unified Sensors by Adafruit
-//et DHT sensor library by Adafruit
-#include <Adafruit_Sensor.h>
-#include <DHT.h>
-#include <DHT_U.h>
-//installer la librairie DS3231 by Jean-Claude Wippler
 #include <DS3231.h>
 #include <Wire.h>
 #include <PersonalData.h>
 #include <EEPROM.h>
+#include <VirtualWire.h> //Lib for wireless
 
 // Liste des fonctions
 void readSMS(String message);
@@ -22,7 +17,6 @@ void turnOn() ;
 void turnOnWithoutMessage() ;
 void turnOff() ;
 void turnOffWithoutMessage() ;
-String getMeteo() ;
 String getDate() ;
 void sendStatus() ;
 void i2c_eeprom_write_byte( int deviceaddress, unsigned int eeaddress, byte data );
@@ -30,7 +24,7 @@ byte i2c_eeprom_read_byte( int deviceaddress, unsigned int eeaddress );
 void eepromWriteData(float value);
 float eepromReadSavedConsigne();
 int getBijunctionState();
-float readDHT();
+float listenTemp();
 
 //Définition des pinouts
 #define BIJUNCTION_PIN 3
@@ -48,11 +42,6 @@ SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
 String textMessage;
 int index = 0;
 
-//Variable et constantes pour la gestion du DHT
-#define DHTTYPE DHT22 // Remplir avec DHT11 ou DHT22 en fonction
-DHT_Unified dht(DHT_PIN, DHTTYPE);
-uint32_t delayMS;
-
 //Variables pour la gestion du temps
 DS3231 Clock;
 bool Century=false;
@@ -68,9 +57,8 @@ int program = DISABLED; // Programmation active ou non
 #define hysteresis 1.0
 float consigne;
 float newConsigne = 1.0;
-const float temperatureOffset = -3.0; /*Dépend des conditions extérieures.
-Ici pour corriger l'issue #2 : la température mesurée était de 21° pour une
-température réelle de 18°*/
+const float temperatureOffset = 0.0; // pour corriger un éventuel offset de temps
+float temperature = 33.3; // température par défaut
 
 //MODE DEBUG
 //Permet d'afficher le mode débug dans la console
@@ -92,13 +80,6 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, HIGH); // The current state of the RELAY_PIN is Off Passant à l'état repos (connecté en mode normalement fermé NC)
   heating = false;
-
-  dht.begin();//Demarrage du DHT
-  sensor_t sensor;
-  dht.temperature().getSensor(&sensor);
-
-  //Set delay between sensor readings based on sensor details.
-  delayMS = sensor.min_delay / 1000;
 
   Serial.begin(9600);//Demarrage Serial
   Serial.print("Connecting...");
@@ -124,17 +105,6 @@ void setup() {
     Serial.print("**DEBUG :: Pin number :");
     Serial.print(pinNumber);
     Serial.println(".");
-  }
-
-  if(DEBUG) {// Test de la configuration
-    Serial.print("**DEBUG :: DHT infos :");
-    Serial.println(F("Temperature Sensor"));
-    Serial.print  (F("Sensor Type: ")); Serial.println(sensor.name);
-    Serial.print  (F("Driver Ver:  ")); Serial.println(sensor.version);
-    Serial.print  (F("Unique ID:   ")); Serial.println(sensor.sensor_id);
-    Serial.print  (F("Max Value:   ")); Serial.print(sensor.max_value); Serial.println(F("°C"));
-    Serial.print  (F("Min Value:   ")); Serial.print(sensor.min_value); Serial.println(F("°C"));
-    Serial.println(F("Resolution:  ")); Serial.print(sensor.resolution); Serial.println(F("°C"));
   }
 
   consigne = eepromReadSavedConsigne(); //Récupération de la consigne enregistrée
@@ -197,6 +167,9 @@ void loop() {
     }
   }
   delay(100);
+
+  //TODO:insert here listenTemp
+  listenTemp();
 }
 
 /*FUNCTIONS*******************************************************************/
@@ -277,7 +250,6 @@ if (DEBUG) {
 }
 
 void heatingProg(){//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
-  float temperature = readDHT() + temperatureOffset ; //lecture du DHT afin de mettre à jour les variables de météo
   if ((temperature < (consigne - 0.5*hysteresis)) && (heating == DISABLED)) {
     turnOnWithoutMessage();
   }
@@ -332,43 +304,8 @@ void turnOffWithoutMessage() {//Extinction du rad si pas de consigne
   previousState = ENABLED;
 }
 
-float readDHT() { // Se connecte au DHT et renvoie la temperature
-  delay(delayMS);
-  sensors_event_t event;
-  float temperature = 100.00;
-  dht.temperature().getEvent(&event);
-  if (isnan(event.temperature)) {
-    Serial.println(F("Error reading temperature!"));
-  } else {
-    temperature = event.temperature;
-  }
-  // Check if any reads failed and exit early (to try again).
-  if (DEBUG) {
-    Serial.print("**DEBUG :: readDHT()\t");
-    Serial.print(F("Temperature: "));
-    Serial.print(event.temperature);
-    Serial.print(F("*C"));
-    Serial.print(" Consigne: ");
-    Serial.print(consigne);
-    Serial.println(" *C ");
-  }
+float listenTemp() { // Se connecte au DHT et renvoie la temperature
   return temperature;
-}
-
-String getMeteo() { //Renvoie un string contenant le message météo
-  String meteo = "";
-  float t = readDHT() + temperatureOffset;
-  if (t != 100) {
-    meteo += "Temp: ";
-    meteo += t;
-    meteo += " *C";
-    return meteo;
-  } else {
-    return "Error reading DHT";
-  }
-  // meteo += "Hyg: ";
-  // meteo += h;
-  // meteo += " % ";
 }
 
 //Renvoie la date
@@ -435,7 +372,8 @@ void sendStatus() {
   delay(500);
   gsm.print("Le chauffage est actuellement ");
   gsm.println(heating ? "ON" : "OFF"); // This is to show if the light is currently switched on or off
-  gsm.println(getMeteo());
+  gsm.print("Température: ");
+  gsm.println(temperature);
   gsm.println(getDate());
   gsm.print("Consigne: ");
   gsm.println(consigne);
