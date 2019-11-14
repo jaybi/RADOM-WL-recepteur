@@ -24,7 +24,8 @@ byte i2c_eeprom_read_byte( int deviceaddress, unsigned int eeaddress );
 void eepromWriteData(float value);
 float eepromReadSavedConsigne();
 int getBijunctionState();
-float listenTemp();
+int listen(int timeout);
+int getLastUpdate();
 
 //Définition des pinouts
 #define BIJUNCTION_PIN 3
@@ -47,7 +48,8 @@ DS3231 Clock;
 bool Century=false;
 bool h12;
 bool PM;
-
+//Pour le comptage du temps
+int lastTempMeasureMillis = 99;
 //Variables de mémorisation d'état
 int previousState = ENABLED; // Etat de présence précédent du secteur commun
 int heating; // Variable d'état du relais (et du chauffage)
@@ -59,6 +61,16 @@ float consigne;
 float newConsigne = 1.0;
 const float temperatureOffset = 0.0; // pour corriger un éventuel offset de temps
 float temperature = 33.3; // température par défaut
+int batteryLevel = 101;
+typedef struct {
+  float temp;
+  int batt;
+} ThermostatData;
+ThermostatData receivedData;
+int lastRefresh = 0;
+
+//Variable pour le wireless
+byte messageSize = sizeof(ThermostatData);
 
 //MODE DEBUG
 //Permet d'afficher le mode débug dans la console
@@ -97,6 +109,11 @@ void setup() {
   delay(1000);                          //for message reception from the network.
   // gsm.println("AT+CMGD=4\r\n"); //Suppression des SMS
   // delay(1000);
+
+  // Initialisation de la bibliothèque VirtualWire
+  // Vous pouvez changez les broches RX/TX/PTT avant vw_setup() si nécessaire
+  vw_setup(2000);
+  vw_rx_start(); // On peut maintenant recevoir des messages
 
   if(DEBUG) {// Test de la configuration du numéro de téléphone
     Serial.print("**DEBUG :: Phone number :");
@@ -143,6 +160,17 @@ void loop() {
     }
   }
 
+  //Attente réception message, timout 8000 ms
+  if (listen(8000)) { //Si renvoie 1 = un float a été reçu
+    lastTempMeasureMillis = millis();
+  };
+
+  lastRefresh = (int)(millis() - lastTempMeasureMillis / 60000);
+  if (lastRefresh == 0 || lastRefresh > 30) {// Si pas mis à jour OU si plus mis à jour depuis 30min désactivation de la prog
+    program = DISABLED;
+    sendMessage("Plus de signal du thermostat");
+  }
+
   if (program == ENABLED) {
     heatingProg();
   }
@@ -167,12 +195,25 @@ void loop() {
     }
   }
   delay(100);
-
-  //TODO:insert here listenTemp
-  listenTemp();
 }
 
 /*FUNCTIONS*******************************************************************/
+int listen(int timeout) {
+  vw_wait_rx_max(timeout);
+  if (vw_get_message((byte *) &receivedData, &messageSize)) {
+    lastTempMeasureMillis = millis();
+    temperature = receivedData.temp;
+    batteryLevel = receivedData.batt;
+    // On copie le message, qu'il soit corrompu ou non
+    if (DEBUG) {
+      Serial.print("Temp transmise : ");
+      Serial.println(temperature); // Affiche le message
+    }
+    return 1;
+  }
+  return 0;
+}
+
 void readSMS(String textMessage) {
   const char* commandList[] = {"Ron", "Roff", "Status", "Progon", "Progoff", "Consigne"};
   int command = -1;
@@ -304,10 +345,6 @@ void turnOffWithoutMessage() {//Extinction du rad si pas de consigne
   previousState = ENABLED;
 }
 
-float listenTemp() { // Se connecte au DHT et renvoie la temperature
-  return temperature;
-}
-
 //Renvoie la date
 String getDate() {
   //Ce code concatène dans "date" la date et l'heure courante
@@ -365,18 +402,23 @@ return date;
 }
 
 //Envoie par SMS le statut
-void sendStatus() {
+void sendStatus() { //TODO: ajouter le niveau de batterie
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
   delay(500);
   gsm.print("Le chauffage est actuellement ");
   gsm.println(heating ? "ON" : "OFF"); // This is to show if the light is currently switched on or off
-  gsm.print("Température: ");
-  gsm.println(temperature);
-  gsm.println(getDate());
+  gsm.print("Temp: ");
+  gsm.print(temperature);
+  gsm.print(" *C (");
+  gsm.print(lastRefresh);
+  gsm.print(" min ago, batt: ");
+  gsm.print(batteryLevel);
+  gsm.println("%)");
   gsm.print("Consigne: ");
   gsm.println(consigne);
+  gsm.println(getDate());
   gsm.write( 0x1a );
 }
 
