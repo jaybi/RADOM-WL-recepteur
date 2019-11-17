@@ -26,6 +26,8 @@ float eepromReadSavedConsigne();
 int getBijunctionState();
 int listen(int timeout);
 int getLastUpdate();
+void checkThermostat();
+void checkBiJunction();
 
 //Définition des pinouts
 #define BIJUNCTION_PIN 3
@@ -33,7 +35,7 @@ enum {
   ENABLED = 1,
   DISABLED = 0
 };
-#define DHT_PIN 6 //Renseigne la pinouille connectée au DHT
+#define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
 SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
 #define RELAY_PIN 2 // Pin connectée au relai
 #define LED_PIN 13
@@ -50,16 +52,22 @@ bool h12;
 bool PM;
 //Pour le comptage du temps
 int lastTempMeasureMillis = 99;
+int lastRefresh = 0;
+#define THERMOSTAT_LISTENING_TIME 8000 // En millisecondes
+
 //Variables de mémorisation d'état
 int previousState = ENABLED; // Etat de présence précédent du secteur commun
 int heating; // Variable d'état du relais (et du chauffage)
 int program = DISABLED; // Programmation active ou non
+int alertNoSignalSent = false;
+int alertBatteryLowSent = false;
+int alertBatteryCriticalSent = false;
 
 //Programmation de la consigne de Programmation
 #define hysteresis 1.0
 float consigne;
 float newConsigne = 1.0;
-const float temperatureOffset = 0.0; // pour corriger un éventuel offset de temps
+//const float temperatureOffset = 0.0; // pour corriger un éventuel offset de temps
 float temperature = 33.3; // température par défaut
 int batteryLevel = 101;
 typedef struct {
@@ -67,7 +75,6 @@ typedef struct {
   int batt;
 } ThermostatData;
 ThermostatData receivedData;
-int lastRefresh = 0;
 
 //Variable pour le wireless
 byte messageSize = sizeof(ThermostatData);
@@ -113,6 +120,7 @@ void setup() {
   // Initialisation de la bibliothèque VirtualWire
   // Vous pouvez changez les broches RX/TX/PTT avant vw_setup() si nécessaire
   vw_setup(2000);
+  vw_set_rx_pin(RX_PIN);
   vw_rx_start(); // On peut maintenant recevoir des messages
 
   if(DEBUG) {// Test de la configuration du numéro de téléphone
@@ -160,21 +168,21 @@ void loop() {
     }
   }
 
-  //Attente réception message, timout 8000 ms
-  if (listen(8000)) { //Si renvoie 1 = un float a été reçu
-    lastTempMeasureMillis = millis();
-  };
-
-  lastRefresh = (int)(millis() - lastTempMeasureMillis / 60000);
-  if (lastRefresh == 0 || lastRefresh > 30) {// Si pas mis à jour OU si plus mis à jour depuis 30min désactivation de la prog
-    program = DISABLED;
-    sendMessage("Plus de signal du thermostat");
-  }
+  //Vérifier le ping timeout, le niveau de batterie, envoie des alertes.
+  checkThermostat();
 
   if (program == ENABLED) {
     heatingProg();
   }
 
+  checkBiJunction();
+
+  //Attente paquet du thermostat, timout 8000 ms
+  listen(THERMOSTAT_LISTENING_TIME);
+}
+
+/*FUNCTIONS*******************************************************************/
+void checkBiJunction() {
   int bijunction = getBijunctionState();
   if ((bijunction == ENABLED) && (previousState == ENABLED)) { // si commun present et état précedent non présent
     if (heating == DISABLED) {
@@ -194,25 +202,60 @@ void loop() {
       }
     }
   }
-  delay(100);
 }
 
-/*FUNCTIONS*******************************************************************/
+void checkThermostat() {
+  // Mise à jour du chrono
+  lastRefresh = (int)(millis() - lastTempMeasureMillis / 60000);
+
+  /*Permet d'envoyer un unique message (jusqu'au redémarrage) si le signal n'a pas
+    été reçu depuis 30min*/
+    if (!alertNoSignalSent) {
+      if (lastRefresh == 0 || lastRefresh > 30) {// Si jamais mis à jour OU si plus mis à jour depuis 30min désactivation de la prog
+        program = DISABLED; // Coupe la programmation pour empécher de rester en chauffe indéfiniement
+        alertNoSignalSent = true;
+        sendMessage("Plus de signal du thermostat.");
+      }
+    }
+  /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
+  du termostat passs en dessous de 20 %*/
+    if(!alertBatteryLowSent) {
+      if (batteryLevel < 20) {
+        alertBatteryLowSent = true;
+        sendMessage("Niveau de batterie faible.");
+      }
+    }
+  /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
+    du termostat passs en dessous de 10 %*/
+    if (!alertBatteryCriticalSent) {
+      if (batteryLevel < 10) {
+        alertBatteryCriticalSent = true;
+      sendMessage("Niveau de batterie critique.");
+      }
+    }
+}
+
 int listen(int timeout) {
   vw_wait_rx_max(timeout);
-  if (vw_get_message((byte *) &receivedData, &messageSize)) {
-    lastTempMeasureMillis = millis();
-    temperature = receivedData.temp;
-    batteryLevel = receivedData.batt;
-    // On copie le message, qu'il soit corrompu ou non
-    if (DEBUG) {
-      Serial.print("Temp transmise : ");
-      Serial.println(temperature); // Affiche le message
-    }
-    return 1;
-  }
-  return 0;
-}
+   // On copie le message, qu'il soit corrompu ou non
+   if (vw_have_message()) {//Si un message est pret a etre lu
+     if (vw_get_message((byte *) &receivedData, &messageSize)) { // Si non corrpompu
+       lastTempMeasureMillis = millis();
+       temperature = receivedData.temp;
+       batteryLevel = receivedData.batt;
+       if (DEBUG) {
+         Serial.print("Temp transmise : ");
+         Serial.println(temperature); // Affiche le message
+       }
+       return 1;
+     }
+     if (DEBUG) {
+       Serial.println("Message du thermostat corrompu.");
+     }
+     return 0; //si corrompu
+   }
+ }
+
 
 void readSMS(String textMessage) {
   const char* commandList[] = {"Ron", "Roff", "Status", "Progon", "Progoff", "Consigne"};
