@@ -24,11 +24,9 @@ Released into the public domain.
 //#include "WProgram.h"
 #include <Arduino.h>
 
-
 #define CLOCK_ADDRESS 0x68
 
 #define SECONDS_FROM_1970_TO_2000 946684800
-
 
 // Constructor
 DS3231::DS3231() {
@@ -131,7 +129,6 @@ uint32_t DateTime::unixtime(void) const {
 
   return t;
 }
-
 
 // Slightly modified from JeeLabs / Ladyada
 // Get all date/time at once to avoid rollover (e.g., minute/second don't match)
