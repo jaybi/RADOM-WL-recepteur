@@ -5,7 +5,7 @@
 #include <DS3231.h>
 #include <Wire.h>
 #include <PersonalData.h>
-#include <EEPROM.h>
+#include <EEPROM.h>//Lib AT24C32
 #include <VirtualWire.h> //Lib for wireless
 
 // Liste des fonctions
