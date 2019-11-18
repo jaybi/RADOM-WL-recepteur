@@ -24,7 +24,7 @@ byte i2c_eeprom_read_byte( int deviceaddress, unsigned int eeaddress );
 void eepromWriteData(float value);
 float eepromReadSavedConsigne();
 int getBijunctionState();
-int listen(int timeout);
+void listen(int timeout);
 int getLastUpdate();
 void checkThermostat();
 void checkBiJunction();
@@ -235,7 +235,7 @@ void checkThermostat() {
     }
 }
 
-int listen(int timeout) {
+void listen(int timeout) {
   vw_wait_rx_max(timeout);
    // On copie le message, qu'il soit corrompu ou non
    if (vw_have_message()) {//Si un message est pret a etre lu
@@ -247,12 +247,10 @@ int listen(int timeout) {
          Serial.print("Temp transmise : ");
          Serial.println(temperature); // Affiche le message
        }
-       return 1;
      }
      if (DEBUG) {
        Serial.println("Message du thermostat corrompu.");
      }
-     return 0; //si corrompu
    }
  }
 
@@ -508,11 +506,10 @@ void eepromWriteData(float value) {
 
 //Renvoie la valeur de la consigne lue dans l'EEPROM
 float eepromReadSavedConsigne() {
-  int b;
   String value;
   for(int i=0;i<5;i++) // la valeur sera "normalement" toujours 5 pour une consigne
   {
-    b = i2c_eeprom_read_byte(0x57, i); //access an address from the memory
+    int b = i2c_eeprom_read_byte(0x57, i); //access an address from the memory
     value += char(b);
   }
   if (0) {
