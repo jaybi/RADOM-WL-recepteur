@@ -70,10 +70,10 @@ float newConsigne = 1.0;
 //const float temperatureOffset = 0.0; // pour corriger un éventuel offset de temps
 float temperature = 33.3; // température par défaut
 int batteryLevel = 101;
- struct ThermostatData{
+struct ThermostatData{
   float temp;
   int batt;
-} ;
+};
 ThermostatData receivedData;
 
 //Variable pour le wireless
