@@ -90,6 +90,7 @@ String phoneNumber = PersonalData.getPhoneNumber();
 String pinNumber = PersonalData.getPinNumber();
 
 /*SETUP************************************************************************/
+// cppcheck-suppress unusedFunction
 void setup() {
   // Start the I2C interface
   Wire.begin();
@@ -137,6 +138,7 @@ void setup() {
 }
 
 /*LOOP************************************************************************/
+// cppcheck-suppress unusedFunction
 void loop() {
   if (gsm.available() > 0) {
     textMessage = gsm.readString();
