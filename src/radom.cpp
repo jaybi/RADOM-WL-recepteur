@@ -28,6 +28,7 @@ void listen(int timeout);
 int getLastUpdate();
 void checkThermostat();
 void checkBiJunction();
+void heatingProcess();
 
 //Définition des pinouts
 #define BIJUNCTION_PIN 3
@@ -52,13 +53,14 @@ bool Century=false;
 bool h12;
 bool PM;
 //Pour le comptage du temps
-int lastTempMeasureMillis = 99;
+unsigned long lastTempMeasureMillis = 0;
 int lastRefresh = 0;
 #define THERMOSTAT_LISTENING_TIME 8000 // En millisecondes
 
 //Variables de mémorisation d'état
-int currentState = DISABLED; // Etat de présence précédent du secteur commun
-int heating; // Variable d'état du relais (et du chauffage)
+int currentBijunctionState = DISABLED; // Etat de présence précédent du secteur commun
+int heating = DISABLED; // Variable d'état du chauffage par le courant perso
+int forcedHeating = DISABLED;
 int program = DISABLED; // Programmation active ou non
 int alertNoSignalSent = false;
 int alertBatteryLowSent = false;
@@ -176,47 +178,63 @@ void loop() {
   //Vérifier le ping timeout, le niveau de batterie, envoie des alertes.
   checkThermostat();
 
-  if (program == ENABLED) {
-    heatingProg();
-  }
-
-  checkBiJunction();
+  //Fonction de chauffage
+  heatingProcess();
 
   //Attente paquet du thermostat, timout 8000 ms
   listen(THERMOSTAT_LISTENING_TIME);
 }
 
 /*FUNCTIONS*******************************************************************/
-void checkBiJunction() {
+
+void activatePerso(){
+  digitalWrite(RELAYS_COMMON, HIGH); // Déconnecter le commun
+  delay(200);
+  digitalWrite(RELAYS_PERSO, HIGH); // Connecter le perso
+  heating = ENABLED;
+}
+
+void desactivatePerso() {
+  digitalWrite(RELAYS_COMMON, LOW); // Déconnecter le perso
+  delay(200);
+  digitalWrite(RELAYS_PERSO, LOW); // Connecter le commun
+  heating = DISABLED;
+}
+
+void heatingProcess() {
   int bijunction = getBijunctionState();
-  if ((bijunction == ENABLED) && (currentState == DISABLED)) { // si commun present et état précedent non présent
-    if (heating == DISABLED) {
-      digitalWrite(RELAYS_PERSO, LOW); // Relai passant
-      currentState = ENABLED;
-      if (DEBUG) {
-        Serial.println("Marche forcée secteur commun activée");
-      }
-    }
+
+  if ((bijunction == ENABLED) && (currentBijunctionState == DISABLED) && (heating == ENABLED)) { // si commun present et état précedent éteint
+    // Si le chauffage est en cours sur le perso, il faut le couper
+    desactivatePerso();
+    currentBijunctionState = ENABLED;
   }
-  if ((bijunction == DISABLED) && (currentState == ENABLED)) { // si plus de commun
-    if (heating == DISABLED) { // et si pas de chauffage en cours
-      digitalWrite(RELAYS_PERSO, HIGH); // Relai bloqué
-      currentState = DISABLED;
-      if (DEBUG) {
-        Serial.println("Marche forcée secteur commun désactivée");
-      }
-    }
+  else if ((bijunction == DISABLED) && (currentBijunctionState == DISABLED) && (program == ENABLED) ) {
+    heatingProg();
+  }
+  else if ((bijunction == DISABLED) && (forcedHeating == ENABLED) && (heating == DISABLED)) {
+    activatePerso();
+  }
+
+  if ((bijunction == DISABLED) && (currentBijunctionState == ENABLED)) {
+    //désactiver le chauffage par le commun, pas de changement d'état des relais (commun connecté, perso déconnecté)
+    currentBijunctionState = DISABLED;
+  }
+  
+  if ((forcedHeating == DISABLED) && (heating == ENABLED)) {
+    //désactiver le chauffage manuel forcé
+    heating = DISABLED;
   }
 }
 
 void checkThermostat() {
   // Mise à jour du chrono
-  lastRefresh = (int)(millis() - lastTempMeasureMillis / 60000);
+  lastRefresh = (int)((millis() - lastTempMeasureMillis) / 60000);
 
   /*Permet d'envoyer un unique message (jusqu'au redémarrage) si le signal n'a pas
     été reçu depuis 30min*/
     if (!alertNoSignalSent) {
-      if (lastRefresh == 0 || lastRefresh > 30) {// Si jamais mis à jour OU si plus mis à jour depuis 30min désactivation de la prog
+      if (lastRefresh > 30) {// si plus mis à jour depuis 30min désactivation de la prog
         program = DISABLED; // Coupe la programmation pour empécher de rester en chauffe indéfiniement
         alertNoSignalSent = true;
         sendMessage("Plus de signal du thermostat.");
@@ -251,9 +269,12 @@ void listen(int timeout) {
        if (DEBUG) {
          Serial.print("Temp transmise : ");
          Serial.println(temperature); // Affiche le message
+         Serial.print("Batt transmise : ");
+         Serial.println(batteryLevel);
+         Serial.println();
        }
      }
-     if (DEBUG) {
+     else if (DEBUG) {
        Serial.println("Message du thermostat corrompu.");
      }
    }
@@ -338,10 +359,10 @@ if (DEBUG) {
 
 void heatingProg(){//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
   if ((temperature < (consigne - 0.5*hysteresis)) && (heating == DISABLED)) {
-    turnOnWithoutMessage();
+    
   }
   if ((temperature > (consigne + 0.5*hysteresis)) && (heating == ENABLED)) {
-    turnOffWithoutMessage();
+    //Désactiver le chauffage par le perso
   }
 }
 
@@ -354,17 +375,15 @@ void turnOn() {//allumage du radiateur si pas de consigne et envoi de SMS
     gsm.println("Le programme est toujours actif !!");
   } else {
     // Turn on RELAYS_PERSO and save current state
+    forcedHeating = ENABLED;
     gsm.println("Chauffage en marche.");
-    digitalWrite(RELAYS_PERSO, LOW);
-    heating = ENABLED;
   }
   gsm.write( 0x1a ); //Permet l'envoi du sms
 }
 
 void turnOnWithoutMessage() {//allumage du radiateur si pas de consigne
   // Turn on RELAYS_PERSO and save current state
-  digitalWrite(RELAYS_PERSO, LOW);
-  heating = ENABLED;
+  forcedHeating = DISABLED;
 }
 
 void turnOff() {//Extinction du rad si pas de consigne et envoie de SMS
@@ -377,18 +396,14 @@ void turnOff() {//Extinction du rad si pas de consigne et envoie de SMS
   } else {
     // Turn off RELAYS_PERSO and save current state
     gsm.println("Le chauffage est eteint.");
-    digitalWrite(RELAYS_PERSO, HIGH);
-    heating = DISABLED;
+    forcedHeating = DISABLED;
   } //Emet une alerte si le programme est toujours actif
   gsm.write( 0x1a ); //Permet l'envoi du sms
-  currentState = DISABLED;
 }
 
 void turnOffWithoutMessage() {//Extinction du rad si pas de consigne
   // Turn on RELAYS_PERSO and save current state
-  digitalWrite(RELAYS_PERSO, HIGH);
-  heating = DISABLED;
-  currentState = DISABLED;
+  forcedHeating = DISABLED;
 }
 
 //Renvoie la date
