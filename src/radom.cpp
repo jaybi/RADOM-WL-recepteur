@@ -37,7 +37,8 @@ enum {
 };
 #define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
 SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
-#define RELAY_PIN 2 // Pin connectée au relai
+#define RELAYS_PERSO 2 // Pin connectée au relai
+#define RELAYS_COMMON 3 // Pin de commandes des relais du commun
 #define LED_PIN 13
 //pin 4,5 -> I2C DS3231
 
@@ -56,7 +57,7 @@ int lastRefresh = 0;
 #define THERMOSTAT_LISTENING_TIME 8000 // En millisecondes
 
 //Variables de mémorisation d'état
-int previousState = ENABLED; // Etat de présence précédent du secteur commun
+int currentState = DISABLED; // Etat de présence précédent du secteur commun
 int heating; // Variable d'état du relais (et du chauffage)
 int program = DISABLED; // Programmation active ou non
 int alertNoSignalSent = false;
@@ -95,10 +96,12 @@ void setup() {
   // Start the I2C interface
   Wire.begin();
   //Configuration des I/O
-  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(RELAYS_PERSO, OUTPUT);
+  pinMode(RELAYS_COMMON, OUTPUT);
   pinMode(BIJUNCTION_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // The current state of the RELAY_PIN is Off Passant à l'état repos (connecté en mode normalement fermé NC)
+  digitalWrite(RELAYS_PERSO, LOW); // The current state of the RELAYS_PERSO is off NO, donc ne laisse pas passser
+  digitalWrite(RELAYS_COMMON, LOW); // NC donc laisse passer au repos
   heating = false;
 
   Serial.begin(9600);//Demarrage Serial
@@ -186,19 +189,19 @@ void loop() {
 /*FUNCTIONS*******************************************************************/
 void checkBiJunction() {
   int bijunction = getBijunctionState();
-  if ((bijunction == ENABLED) && (previousState == ENABLED)) { // si commun present et état précedent non présent
+  if ((bijunction == ENABLED) && (currentState == DISABLED)) { // si commun present et état précedent non présent
     if (heating == DISABLED) {
-      digitalWrite(RELAY_PIN, LOW); // Relai passant
-      previousState = DISABLED;
+      digitalWrite(RELAYS_PERSO, LOW); // Relai passant
+      currentState = ENABLED;
       if (DEBUG) {
         Serial.println("Marche forcée secteur commun activée");
       }
     }
   }
-  if ((bijunction == DISABLED) && (previousState == DISABLED)) { // si plus de commun
+  if ((bijunction == DISABLED) && (currentState == ENABLED)) { // si plus de commun
     if (heating == DISABLED) { // et si pas de chauffage en cours
-      digitalWrite(RELAY_PIN, HIGH); // Relai bloqué
-      previousState = ENABLED;
+      digitalWrite(RELAYS_PERSO, HIGH); // Relai bloqué
+      currentState = DISABLED;
       if (DEBUG) {
         Serial.println("Marche forcée secteur commun désactivée");
       }
@@ -350,17 +353,17 @@ void turnOn() {//allumage du radiateur si pas de consigne et envoi de SMS
   if (program) {
     gsm.println("Le programme est toujours actif !!");
   } else {
-    // Turn on RELAY_PIN and save current state
+    // Turn on RELAYS_PERSO and save current state
     gsm.println("Chauffage en marche.");
-    digitalWrite(RELAY_PIN, LOW);
+    digitalWrite(RELAYS_PERSO, LOW);
     heating = ENABLED;
   }
   gsm.write( 0x1a ); //Permet l'envoi du sms
 }
 
 void turnOnWithoutMessage() {//allumage du radiateur si pas de consigne
-  // Turn on RELAY_PIN and save current state
-  digitalWrite(RELAY_PIN, LOW);
+  // Turn on RELAYS_PERSO and save current state
+  digitalWrite(RELAYS_PERSO, LOW);
   heating = ENABLED;
 }
 
@@ -372,20 +375,20 @@ void turnOff() {//Extinction du rad si pas de consigne et envoie de SMS
   if (program) {
     gsm.println("Le programme est toujours actif !!");
   } else {
-    // Turn off RELAY_PIN and save current state
+    // Turn off RELAYS_PERSO and save current state
     gsm.println("Le chauffage est eteint.");
-    digitalWrite(RELAY_PIN, HIGH);
+    digitalWrite(RELAYS_PERSO, HIGH);
     heating = DISABLED;
   } //Emet une alerte si le programme est toujours actif
   gsm.write( 0x1a ); //Permet l'envoi du sms
-  previousState = ENABLED;
+  currentState = DISABLED;
 }
 
 void turnOffWithoutMessage() {//Extinction du rad si pas de consigne
-  // Turn on RELAY_PIN and save current state
-  digitalWrite(RELAY_PIN, HIGH);
+  // Turn on RELAYS_PERSO and save current state
+  digitalWrite(RELAYS_PERSO, HIGH);
   heating = DISABLED;
-  previousState = ENABLED;
+  currentState = DISABLED;
 }
 
 //Renvoie la date
