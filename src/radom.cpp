@@ -85,12 +85,12 @@ byte messageSize = sizeof(ThermostatData);
 //MODE DEBUG
 //Permet d'afficher le mode débug dans la console
 //Beaucoup plus d'infos apparaissent
-#define DEBUG 0 // 0 pour désactivé et 1 pour activé
+#define DEBUG 1 // 0 pour désactivé et 1 pour activé
 
 //Récupération des données privées qui ne sont pas uploadées dans GITHUB
-PersonalData PersonalData; // Objet contenant les données sensibles
-String phoneNumber = PersonalData.getPhoneNumber();
-String pinNumber = PersonalData.getPinNumber();
+PersonalData personalData; // Objet contenant les données sensibles
+String phoneNumber = personalData.getPhoneNumber();
+String pinNumber = personalData.getPinNumber();
 
 /*SETUP************************************************************************/
 // cppcheck-suppress unusedFunction
@@ -143,7 +143,6 @@ void setup() {
 }
 
 /*LOOP************************************************************************/
-// cppcheck-suppress unusedFunction
 void loop() {
   if (gsm.available() > 0) {
     textMessage = gsm.readString();
@@ -192,6 +191,7 @@ void activatePerso(){
   delay(200);
   digitalWrite(RELAYS_PERSO, HIGH); // Connecter le perso
   heating = ENABLED;
+  Serial.println("Perso activé");
 }
 
 void desactivatePerso() {
@@ -199,6 +199,8 @@ void desactivatePerso() {
   delay(200);
   digitalWrite(RELAYS_PERSO, LOW); // Connecter le commun
   heating = DISABLED;
+  Serial.println("Perso désactivé");
+
 }
 
 void heatingProcess() {
