@@ -40,13 +40,17 @@ enum {
   ENABLED = 1,
   DISABLED = 0
 };
+enum {
+  INDIVIDUAL = 0,
+  COMMON = 1
+};
 
 //Définition des pinouts
-SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
-#define BIJUNCTION_PIN 3
-#define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
 #define RELAYS_PERSO 2 // Pin connectée au relai
 #define RELAYS_COMMON 3 // Pin de commandes des relais du commun
+#define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
+#define BIJUNCTION_PIN 7
+SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
 #define LED_PIN 13
 //pin 4,5 -> I2C DS3231
 
@@ -65,13 +69,17 @@ int lastRefresh = 0;
 #define ELEC_NETWORK_SWITCHING_TIME 200
 
 //Variables de mémorisation d'état
-bool currentBijunctionState = DISABLED; // Etat de présence précédent du secteur commun
-bool heating = DISABLED; // Variable d'état du chauffage par le courant perso
-bool forcedHeating = DISABLED;
+bool currentState = DISABLED; // Etat de présence précédent du secteur commun
+bool heating; // Variable d'état du relais (et du chauffage)
 bool program = DISABLED; // Programmation active ou non
-bool alertNoSignalSent = DISABLED;
-bool alertBatteryLowSent = DISABLED;
-bool alertBatteryCriticalSent = DISABLED;
+bool currentProgramState = DISABLED;
+bool alertNoSignalSent = false;
+bool alertBatteryLowSent = false;
+bool alertBatteryCriticalSent = false;
+bool forcedHeating = false;
+bool currentBijunctionState = DISABLED; // Etat de présence précédent du secteur commun
+bool previousTempState;
+int currentSource = COMMON;
 
 //Programmation de la consigne de Programmation
 #define hysteresis 1.0
@@ -205,27 +213,24 @@ void receiveSMS()
 }
 
 //Déconnecte du réseau commun, puis connecte sur l'individuel
-void switchToIndividual()
-{
-  digitalWrite(RELAYS_COMMON, HIGH); // Déconnecter le commun
-  delay(ELEC_NETWORK_SWITCHING_TIME);
-  digitalWrite(RELAYS_PERSO, HIGH); // Connecter le perso
-  heating = ENABLED;
-  if (DEBUG) {
-    Serial.println("Perso activé");
+void switchToIndividual(){
+  if (currentSource != INDIVIDUAL) 
+  {
+    digitalWrite(RELAYS_COMMON, LOW); // Déconnecter le commun
+    delay(200);
+    digitalWrite(RELAYS_PERSO, HIGH); // Connecter le perso
+    currentSource = INDIVIDUAL;
   }
 }
 
 //Déconnecte du réseau individuel, puis connecte le réseau commun
-void activateCommon() 
-{
-  digitalWrite(RELAYS_COMMON, LOW); // Déconnecter le perso
-  delay(ELEC_NETWORK_SWITCHING_TIME);
-  digitalWrite(RELAYS_PERSO, LOW); // Connecter le commun
-  heating = DISABLED;
-  if (DEBUG) 
+void switchToCommon() {
+  if (currentSource != COMMON) 
   {
-    Serial.println("Perso désactivé");
+    digitalWrite(RELAYS_PERSO, LOW); // Déconnecter le perso
+    delay(200);
+    digitalWrite(RELAYS_COMMON, HIGH); // Connecter le commun
+    currentSource = COMMON;
   }
 }
 
@@ -233,34 +238,68 @@ void activateCommon()
 void heatingProcess() {
   int bijunction = getBijunctionState();
 
-  //Bascule sur la bijonction en cas de présence détectée
-  if ((bijunction == ENABLED) && (currentBijunctionState == DISABLED) && (heating == ENABLED)) 
-  { // si commun present et état précedent éteint
-    // Si le chauffage est en cours sur le perso, il faut le couper
-    switchToCommon();
+ //Pour activer
+  if (bijunction && !currentBijunctionState ) 
+  {
     currentBijunctionState = ENABLED;
-  } else if ((bijunction == DISABLED) && (currentBijunctionState == DISABLED) && (program == ENABLED) ) 
-  {//Bascule en mode auto en cas de programme lancé
-    heatingProg();
+    switchToCommon();
+  } 
+  else if (!bijunction && program && !currentProgramState)
+  {
+    currentProgramState = ENABLED;
+    
+    
+  } 
+  else if (!bijunction && forcedHeating && !heating && !program)
+  {
+    switchToIndividual();
+    heating = ENABLED;
+  }
+  if (!bijunction && currentProgramState) 
+  {
+        heatingProg();
   }
 
-  //Bascule en marche forcée 
-  if ((bijunction == DISABLED) && (forcedHeating == ENABLED) && (heating == DISABLED)) 
+  //Bascule si pendant une marche forcée, le commun devient présent puis absent
+  if (!bijunction && currentBijunctionState)
+  {
+    if (forcedHeating)
+    {
+      switchToIndividual();
+    }
+    currentBijunctionState = DISABLED;
+  }
+  //Pour désactiver dans le cas d'un programme qui s'arrete
+  if (!program && currentProgramState)
+  {
+    switchToCommon();
+    currentProgramState = DISABLED;
+    heating = DISABLED;
+    if (forcedHeating) //Supprime le flag forcedHeating lors de l'arret de la programmation
+    {
+      forcedHeating = DISABLED; 
+      heating = DISABLED;
+    }
+  } 
+  //Pour désactiver une marche forcée
+  if (!forcedHeating && heating)
+  {
+    heating = DISABLED;
+    switchToCommon();
+    Serial.println("3");
+  }
+}
+
+//Analyse la temperature actuelle et la compare à la consigne, demande la chauffe en cas de besoin
+void heatingProg(){//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
+  if ((temperature < (consigne - 0.5*hysteresis))) 
   {
     switchToIndividual();
   }
-
-  //Remet l'état de bijonction présente en false si plus de présence détectée pas de changement d'état des relais (commun connecté, perso déconnecté)
-  if ((bijunction == DISABLED) && (currentBijunctionState == ENABLED)) 
+  if ((temperature > (consigne + 0.5*hysteresis))) 
   {
-    currentBijunctionState = DISABLED;
-  }
-
-  //désactiver le chauffage manuel forcé en cas de notification forcedHeating=false
-  if ((forcedHeating == DISABLED) && (heating == ENABLED)) 
-  {
+    //Désactiver le chauffage par le perso
     switchToCommon();
-    heating = DISABLED;
   }
 }
 
@@ -275,7 +314,8 @@ void checkThermometer()
     if (!alertNoSignalSent) {
       if (lastRefresh > 30) {// si plus mis à jour depuis 30min désactivation de la prog
         program = DISABLED; // Coupe la programmation pour empécher de rester en chauffe indéfiniement
-        alertNoSignalSent = true;
+        digitalWrite(LED_PIN, LOW); //Extinction de la led
+        alertNoSignalSent = true; // Flag de message parti, ce flag empeche de pouvoir relancer un programme. Il faut redémarrer l'appareil
         sendMessage("Plus de signal du thermostat.");
       }
     }
@@ -348,15 +388,17 @@ void readSMS(String textMessage)
       sendStatus();
       break;
     case 3: // Progon
-      program = ENABLED;
-      sendMessage("Programme actif");
-      digitalWrite(LED_PIN, HIGH);
+      if (!alertNoSignalSent) //Empeche de relancer une programmation quand le thermometre n'a plus de batterie ou ne répond plus
+      {
+        program = ENABLED;
+        sendMessage("Programme actif");
+        digitalWrite(LED_PIN, HIGH);
+      }
       break;
     case 4: // Progoff
       program = DISABLED;
       sendMessage("Programme inactif");
       digitalWrite(LED_PIN, LOW);
-      turnOff();
       break;
     case 5: // Consigne
       setConsigne(textMessage, index);
@@ -408,21 +450,6 @@ if (DEBUG)
 {
   sendMessage("Cette consigne est deja enregistree");
 }
-}
-
-//Analyse la temperature actuelle et la compare à la consigne, demande la chauffe en cas de besoin
-void heatingProg()
-{//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
-  if ((temperature < (consigne - 0.5*hysteresis)) && (heating == DISABLED)) 
-  {
-    //Activer le chauffage par le perso
-    forcedHeating = ENABLED;
-  }
-  if ((temperature > (consigne + 0.5*hysteresis)) && (heating == ENABLED))
-  {
-    //Désactiver le chauffage par le perso
-    forcedHeating = DISABLED; 
-  }
 }
 
 //Allume le radiateur en mode marche forcée
