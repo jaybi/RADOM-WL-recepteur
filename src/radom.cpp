@@ -225,6 +225,7 @@ void heatingProcess() {
   
   if ((forcedHeating == DISABLED) && (heating == ENABLED)) {
     //désactiver le chauffage manuel forcé
+    desactivatePerso();
     heating = DISABLED;
   }
 }
@@ -361,10 +362,12 @@ if (DEBUG) {
 
 void heatingProg(){//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
   if ((temperature < (consigne - 0.5*hysteresis)) && (heating == DISABLED)) {
-    
+    //Activer le chauffage par le perso
+    activatePerso();    
   }
   if ((temperature > (consigne + 0.5*hysteresis)) && (heating == ENABLED)) {
     //Désactiver le chauffage par le perso
+    desactivatePerso();
   }
 }
 
