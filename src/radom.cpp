@@ -200,7 +200,6 @@ void desactivatePerso() {
   digitalWrite(RELAYS_PERSO, LOW); // Connecter le commun
   heating = DISABLED;
   Serial.println("Perso désactivé");
-
 }
 
 void heatingProcess() {
