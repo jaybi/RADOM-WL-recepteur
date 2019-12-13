@@ -14,9 +14,7 @@ void sendMessage(String message);
 void setConsigne(String message, int indexConsigne);
 void heatingProg();
 void turnOn() ;
-void turnOnWithoutMessage() ;
 void turnOff() ;
-void turnOffWithoutMessage() ;
 String getDate() ;
 void sendStatus() ;
 void i2c_eeprom_write_byte( int deviceaddress, unsigned int eeaddress, byte data );
@@ -25,10 +23,10 @@ void eepromWriteData(float value);
 float eepromReadSavedConsigne();
 int getBijunctionState();
 void listen(int timeout);
-int getLastUpdate();
 void checkThermostat();
-void checkBiJunction();
 void heatingProcess();
+void switchToIndividual();
+void switchToCommon();
 
 //Définition des pinouts
 #define BIJUNCTION_PIN 3
@@ -94,7 +92,8 @@ String pinNumber = personalData.getPinNumber();
 
 /*SETUP************************************************************************/
 // cppcheck-suppress unusedFunction
-void setup() {
+void setup() 
+{
   // Start the I2C interface
   Wire.begin();
   //Configuration des I/O
@@ -124,7 +123,6 @@ void setup() {
   // delay(1000);
 
   // Initialisation de la bibliothèque VirtualWire
-  // Vous pouvez changez les broches RX/TX/PTT avant vw_setup() si nécessaire
   vw_set_rx_pin(RX_PIN);
   vw_setup(2000);
   vw_rx_start(); // On peut maintenant recevoir des messages
@@ -143,18 +141,23 @@ void setup() {
 }
 
 /*LOOP************************************************************************/
-void loop() {
-  if (gsm.available() > 0) {
+void loop() 
+{
+  if (gsm.available() > 0) 
+  {
     textMessage = gsm.readString();
-    if (DEBUG) {
+    if (DEBUG) 
+    {
       Serial.println(textMessage);
     }
     //Cas nominal avec le numéro de tel par défaut
-    if ( (textMessage.indexOf(phoneNumber)) < 10 && textMessage.indexOf(phoneNumber) > 0) { // SMS arrived
+    if ( (textMessage.indexOf(phoneNumber)) < 10 && textMessage.indexOf(phoneNumber) > 0) 
+    { // SMS arrived
       readSMS(textMessage);
     }
     //Permet de prendre la main pour le controle du système
-    else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0) {
+    else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0) 
+    {
       int indexOfPhoneNumber = textMessage.indexOf("+",5);
       int finalIndexOfPhoneNumber = textMessage.indexOf("\"", indexOfPhoneNumber);
       String newPhoneNumber = textMessage.substring(indexOfPhoneNumber,finalIndexOfPhoneNumber);
@@ -162,7 +165,8 @@ void loop() {
       information.concat(newPhoneNumber);
       sendMessage(information);
       phoneNumber=newPhoneNumber;
-      if (DEBUG) {
+      if (DEBUG) 
+      {
         Serial.print("First index : ");
         Serial.println(indexOfPhoneNumber);
         Serial.print("Last index : ");
@@ -186,50 +190,66 @@ void loop() {
 
 /*FUNCTIONS*******************************************************************/
 
-void activatePerso(){
+void switchToIndividual()
+{
   digitalWrite(RELAYS_COMMON, HIGH); // Déconnecter le commun
   delay(200);
   digitalWrite(RELAYS_PERSO, HIGH); // Connecter le perso
   heating = ENABLED;
-  Serial.println("Perso activé");
+  if (DEBUG) {
+    Serial.println("Perso activé");
+  }
 }
 
-void desactivatePerso() {
+void activateCommon() 
+{
   digitalWrite(RELAYS_COMMON, LOW); // Déconnecter le perso
   delay(200);
   digitalWrite(RELAYS_PERSO, LOW); // Connecter le commun
   heating = DISABLED;
-  Serial.println("Perso désactivé");
+  if (DEBUG) 
+  {
+    Serial.println("Perso désactivé");
+  }
 }
 
 void heatingProcess() {
   int bijunction = getBijunctionState();
 
-  if ((bijunction == ENABLED) && (currentBijunctionState == DISABLED) && (heating == ENABLED)) { // si commun present et état précedent éteint
+  //Bascule sur la bijonction en cas de présence détectée
+  if ((bijunction == ENABLED) && (currentBijunctionState == DISABLED) && (heating == ENABLED)) 
+  { // si commun present et état précedent éteint
     // Si le chauffage est en cours sur le perso, il faut le couper
-    desactivatePerso();
+    switchToCommon();
     currentBijunctionState = ENABLED;
   }
-  else if ((bijunction == DISABLED) && (currentBijunctionState == DISABLED) && (program == ENABLED) ) {
+  //Bascule en mode auto en cas de programme lancé
+  else if ((bijunction == DISABLED) && (currentBijunctionState == DISABLED) && (program == ENABLED) ) 
+  {
     heatingProg();
   }
-  else if ((bijunction == DISABLED) && (forcedHeating == ENABLED) && (heating == DISABLED)) {
-    activatePerso();
+  //Bascule en marche forcée 
+  else if ((bijunction == DISABLED) && (forcedHeating == ENABLED) && (heating == DISABLED)) 
+  {
+    switchToIndividual();
   }
 
-  if ((bijunction == DISABLED) && (currentBijunctionState == ENABLED)) {
-    //désactiver le chauffage par le commun, pas de changement d'état des relais (commun connecté, perso déconnecté)
+  //Remet l'état de bijonction présente en false si plus de présence détectée pas de changement d'état des relais (commun connecté, perso déconnecté)
+  if ((bijunction == DISABLED) && (currentBijunctionState == ENABLED)) 
+  {
     currentBijunctionState = DISABLED;
   }
-  
-  if ((forcedHeating == DISABLED) && (heating == ENABLED)) {
-    //désactiver le chauffage manuel forcé
-    desactivatePerso();
+
+  //désactiver le chauffage manuel forcé en cas de notification forcedHeating=false
+  if ((forcedHeating == DISABLED) && (heating == ENABLED)) 
+  {
+    switchToCommon();
     heating = DISABLED;
   }
 }
 
-void checkThermostat() {
+void checkThermostat() 
+{
   // Mise à jour du chrono
   lastRefresh = (int)((millis() - lastTempMeasureMillis) / 60000);
 
@@ -243,7 +263,7 @@ void checkThermostat() {
       }
     }
   /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
-  du termostat passs en dessous de 20 %*/
+  du termostat passs en dessous de 20°C*/
     if(!alertBatteryLowSent) {
       if (batteryLevel < 20) {
         alertBatteryLowSent = true;
@@ -251,7 +271,7 @@ void checkThermostat() {
       }
     }
   /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
-    du termostat passs en dessous de 10 %*/
+    du termostat passs en dessous de 10 °C*/
     if (!alertBatteryCriticalSent) {
       if (batteryLevel < 10) {
         alertBatteryCriticalSent = true;
@@ -260,7 +280,8 @@ void checkThermostat() {
     }
 }
 
-void listen(int timeout) {
+void listen(int timeout) 
+{
   vw_wait_rx_max(timeout);
    // On copie le message, qu'il soit corrompu ou non
    if (vw_have_message()) {//Si un message est pret a etre lu
@@ -282,19 +303,22 @@ void listen(int timeout) {
    }
  }
 
-
-void readSMS(String textMessage) {
+void readSMS(String textMessage) 
+{
   const char* commandList[] = {"Ron", "Roff", "Status", "Progon", "Progoff", "Consigne"};
   int command = -1;
 
-  for(int i = 0; i<6; i++) {
-    if (textMessage.indexOf(commandList[i]) > 0) {
+  for(int i = 0; i<6; i++) 
+  {
+    if (textMessage.indexOf(commandList[i]) > 0) 
+    {
       command = i;
       index = textMessage.indexOf(commandList[i]);
       break; //Permet de sortir du for des que le cas est validé
     }
   }
-  switch (command) {
+  switch (command) 
+  {
     case 0: // Ron
     turnOn();
     break;
@@ -323,7 +347,8 @@ void readSMS(String textMessage) {
   }
 }
 
-void sendMessage(String message) {//Envoi du "Message" par sms
+void sendMessage(String message) 
+{//Envoi du "Message" par sms
 gsm.print("AT+CMGS=\"");
 gsm.print(phoneNumber);
 gsm.println("\"");
@@ -332,12 +357,14 @@ gsm.print(message);
 gsm.write( 0x1a ); //Permet l'envoi du sms
 }
 
-void setConsigne(String message, int indexConsigne) {//Réglage de la consigne contenue dans le message à l'indexConsigne
+void setConsigne(String message, int indexConsigne) 
+{//Réglage de la consigne contenue dans le message à l'indexConsigne
 newConsigne = message.substring(indexConsigne + 9, message.length()).toFloat(); // On extrait la valeur et on la cast en float // 9 = "Consigne ".length()
 Serial.print("nouvelle consigne :");
 Serial.println(newConsigne);
 if (!newConsigne) {// Gestion de l'erreur de lecture et remontée du bug
-if (DEBUG) {
+if (DEBUG) 
+{
   Serial.println("Impossible d'effectuer la conversion de la température String -> Float. Mauvais mot-clé? Mauvais index?");
   Serial.print("indexConsigne = ");
   Serial.println(indexConsigne);
@@ -345,39 +372,48 @@ if (DEBUG) {
   Serial.println(message.length()- indexConsigne + 9);
   Serial.print("newConsigne = ");
   Serial.println(newConsigne);
-} else {
+} else 
+{
   sendMessage("Erreur de lecture de la consigne envoyee");
 }
-} else if (consigne != newConsigne) { //Si tout se passe bien et la consigne est différente la consigne actuelle
+} else if (consigne != newConsigne) 
+{ //Si tout se passe bien et la consigne est différente la consigne actuelle
   consigne = newConsigne;
   message = "La nouvelle consigne est de ";
   message.concat(consigne);
   sendMessage(message);
   eepromWriteData(consigne);//Enregistrement dans l'EEPROM
-} else {
+} else 
+{
   sendMessage("Cette consigne est deja enregistree");
 }
 }
 
-void heatingProg(){//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
-  if ((temperature < (consigne - 0.5*hysteresis)) && (heating == DISABLED)) {
+void heatingProg()
+{//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
+  if ((temperature < (consigne - 0.5*hysteresis)) && (heating == DISABLED)) 
+  {
     //Activer le chauffage par le perso
-    activatePerso();    
+    forcedHeating = ENABLED; //TODO: à tester 
   }
-  if ((temperature > (consigne + 0.5*hysteresis)) && (heating == ENABLED)) {
+  if ((temperature > (consigne + 0.5*hysteresis)) && (heating == ENABLED))
+  {
     //Désactiver le chauffage par le perso
-    desactivatePerso();
+    forcedHeating = DISABLED; //TODO: à tester 
   }
 }
 
-void turnOn() {//allumage du radiateur si pas de consigne et envoi de SMS
+void turnOn() 
+{//allumage du radiateur si pas de consigne et envoi de SMS
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
   delay(500);
-  if (program) {
+  if (program) 
+  {
     gsm.println("Le programme est toujours actif !!");
-  } else {
+  } else 
+  {
     // Turn on RELAYS_PERSO and save current state
     forcedHeating = ENABLED;
     gsm.println("Chauffage en marche.");
@@ -385,19 +421,17 @@ void turnOn() {//allumage du radiateur si pas de consigne et envoi de SMS
   gsm.write( 0x1a ); //Permet l'envoi du sms
 }
 
-void turnOnWithoutMessage() {//allumage du radiateur si pas de consigne
-  // Turn on RELAYS_PERSO and save current state
-  forcedHeating = DISABLED;
-}
-
-void turnOff() {//Extinction du rad si pas de consigne et envoie de SMS
+void turnOff() 
+{//Extinction du rad si pas de consigne et envoie de SMS
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
   delay(500);
-  if (program) {
+  if (program) 
+  {
     gsm.println("Le programme est toujours actif !!");
-  } else {
+  } else 
+  {
     // Turn off RELAYS_PERSO and save current state
     gsm.println("Le chauffage est eteint.");
     forcedHeating = DISABLED;
@@ -405,13 +439,9 @@ void turnOff() {//Extinction du rad si pas de consigne et envoie de SMS
   gsm.write( 0x1a ); //Permet l'envoi du sms
 }
 
-void turnOffWithoutMessage() {//Extinction du rad si pas de consigne
-  // Turn on RELAYS_PERSO and save current state
-  forcedHeating = DISABLED;
-}
-
 //Renvoie la date
-String getDate() {
+String getDate() 
+{
   //Ce code concatène dans "date" la date et l'heure courante
   //dans le format 20YY MM DD HH:MM:SS
   String date ="";
@@ -432,12 +462,14 @@ String getDate() {
   //Ce code est exécuté si la variable DEBUG est a TRUE
   //Permet d'afficher dans la console la date et l'heure au format
   // YYYY MM DD w HH MM SS 24h
-  if (DEBUG) {
+  if (DEBUG) 
+  {
     Serial.print("**DEBUG :: getDate()\t");
     Serial.print("2");
     if (Century) {      // Won't need this for 89 years.
     Serial.print("1");
-  } else {
+  } else 
+  {
     Serial.print("0");
   }
   Serial.print(Clock.getYear(), DEC);
@@ -453,13 +485,17 @@ String getDate() {
   Serial.print(Clock.getMinute(), DEC);
   Serial.print(' ');
   Serial.print(Clock.getSecond(), DEC);
-  if (h12) {
-    if (PM) {
+  if (h12) 
+  {
+    if (PM) 
+    {
       Serial.print(" PM ");
-    } else {
+    } else 
+    {
       Serial.print(" AM ");
     }
-  } else {
+  } else 
+  {
     Serial.println(" 24h ");
   }
 }
@@ -467,7 +503,8 @@ return date;
 }
 
 //Envoie par SMS le statut
-void sendStatus() { //TODO: ajouter le niveau de batterie
+void sendStatus() 
+{ //TODO: ajouter le niveau de batterie
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
@@ -488,7 +525,8 @@ void sendStatus() { //TODO: ajouter le niveau de batterie
 }
 
 //Ecrtiture par byte dans l'EEPROM
-void i2c_eeprom_write_byte( int deviceaddress, unsigned int eeaddress, byte data ) {
+void i2c_eeprom_write_byte( int deviceaddress, unsigned int eeaddress, byte data ) 
+{
   int rdata = data;
   Wire.beginTransmission(deviceaddress);
   Wire.write((int)(eeaddress >> 8)); // MSB
@@ -498,7 +536,8 @@ void i2c_eeprom_write_byte( int deviceaddress, unsigned int eeaddress, byte data
 }
 
 //Lecture par Byte dans l'EEPROM
-byte i2c_eeprom_read_byte( int deviceaddress, unsigned int eeaddress ) {
+byte i2c_eeprom_read_byte( int deviceaddress, unsigned int eeaddress )
+{
   byte rdata = 0xFF;
   Wire.beginTransmission(deviceaddress);
   Wire.write((int)(eeaddress >> 8)); // MSB
@@ -510,7 +549,8 @@ byte i2c_eeprom_read_byte( int deviceaddress, unsigned int eeaddress ) {
 }
 
 //Ecriture de la value dans l'EEPROM
-void eepromWriteData(float value) {
+void eepromWriteData(float value) 
+{
   String stringValue = String(value);
   int valueLength = sizeof(stringValue);
   if (valueLength < 32) { //A priori il existe une limite, voir dans AT24C32_examples
@@ -529,14 +569,16 @@ void eepromWriteData(float value) {
 }
 
 //Renvoie la valeur de la consigne lue dans l'EEPROM
-float eepromReadSavedConsigne() {
+float eepromReadSavedConsigne() 
+{
   String value;
   for(int i=0;i<5;i++) // la valeur sera "normalement" toujours 5 pour une consigne
   {
     int b = i2c_eeprom_read_byte(0x57, i); //access an address from the memory
     value += char(b);
   }
-  if (0) {
+  if (0) 
+  {
     Serial.print("**DEBUG :: eepromReadSavedConsigne()");
     Serial.print("\tRead value: "); //ATTENTION : le 18/5/19 ce message provoquait une erreur quand il était plus long
     Serial.println(value);
@@ -544,7 +586,8 @@ float eepromReadSavedConsigne() {
   return value.toFloat();
 }
 
-int getBijunctionState() {
+int getBijunctionState() 
+{
   return (digitalRead(BIJUNCTION_PIN) ? DISABLED : ENABLED);
   //si le détecteur renvoie 1 (non présent), la fonction renvoie DISABLED (return 0)
   //Si le détecteur renvoie 0 (présent), la fonction renvoie ENABLED (return 1)
