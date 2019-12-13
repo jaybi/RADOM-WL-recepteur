@@ -8,7 +8,13 @@
 #include <EEPROM.h>//Lib AT24C32
 #include <VirtualWire.h> //Lib for wireless
 
+//MODE DEBUG *************************************************************************************************
+//Permet d'afficher le mode débug dans la console
+//Beaucoup plus d'infos apparaissent
+#define DEBUG 0 // 0 pour désactivé et 1 pour activé
+
 // Liste des fonctions
+
 void receiveSMS();
 void readSMS(String message);
 void sendMessage(String message);
@@ -24,19 +30,21 @@ void eepromWriteData(float value);
 float eepromReadSavedConsigne();
 int getBijunctionState();
 void listen(int timeout);
-void checkThermostat();
+void checkThermometer();
 void heatingProcess();
 void switchToIndividual();
 void switchToCommon();
 
-//Définition des pinouts
-#define BIJUNCTION_PIN 3
+//Enumerations
 enum {
   ENABLED = 1,
   DISABLED = 0
 };
-#define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
+
+//Définition des pinouts
 SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
+#define BIJUNCTION_PIN 3
+#define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
 #define RELAYS_PERSO 2 // Pin connectée au relai
 #define RELAYS_COMMON 3 // Pin de commandes des relais du commun
 #define LED_PIN 13
@@ -47,7 +55,6 @@ String textMessage;
 int index = 0;
 
 //Variables pour la gestion du temps
-DS3231 Clock;
 bool Century=false;
 bool h12;
 bool PM;
@@ -55,15 +62,16 @@ bool PM;
 unsigned long lastTempMeasureMillis = 0;
 int lastRefresh = 0;
 #define THERMOSTAT_LISTENING_TIME 8000 // En millisecondes
+#define ELEC_NETWORK_SWITCHING_TIME 200
 
 //Variables de mémorisation d'état
-int currentBijunctionState = DISABLED; // Etat de présence précédent du secteur commun
-int heating = DISABLED; // Variable d'état du chauffage par le courant perso
-int forcedHeating = DISABLED;
-int program = DISABLED; // Programmation active ou non
-int alertNoSignalSent = false;
-int alertBatteryLowSent = false;
-int alertBatteryCriticalSent = false;
+bool currentBijunctionState = DISABLED; // Etat de présence précédent du secteur commun
+bool heating = DISABLED; // Variable d'état du chauffage par le courant perso
+bool forcedHeating = DISABLED;
+bool program = DISABLED; // Programmation active ou non
+bool alertNoSignalSent = DISABLED;
+bool alertBatteryLowSent = DISABLED;
+bool alertBatteryCriticalSent = DISABLED;
 
 //Programmation de la consigne de Programmation
 #define hysteresis 1.0
@@ -76,15 +84,15 @@ struct ThermostatData{
   float temp;
   int batt;
 };
+
+//Objet donnant accès aux données de temps
+DS3231 Clock;
+
+//Structure de données contenant un float et un int
 ThermostatData receivedData;
 
 //Variable pour le wireless
 byte messageSize = sizeof(ThermostatData);
-
-//MODE DEBUG
-//Permet d'afficher le mode débug dans la console
-//Beaucoup plus d'infos apparaissent
-#define DEBUG 1 // 0 pour désactivé et 1 pour activé
 
 //Récupération des données privées qui ne sont pas uploadées dans GITHUB
 PersonalData personalData; // Objet contenant les données sensibles
@@ -92,11 +100,11 @@ String phoneNumber = personalData.getPhoneNumber();
 String pinNumber = personalData.getPinNumber();
 
 /*SETUP************************************************************************/
-// cppcheck-suppress unusedFunction
 void setup() 
 {
   // Start the I2C interface
   Wire.begin();
+
   //Configuration des I/O
   pinMode(RELAYS_PERSO, OUTPUT);
   pinMode(RELAYS_COMMON, OUTPUT);
@@ -104,16 +112,17 @@ void setup()
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(RELAYS_PERSO, LOW); // The current state of the RELAYS_PERSO is off NO, donc ne laisse pas passser
   digitalWrite(RELAYS_COMMON, LOW); // NC donc laisse passer au repos
-  heating = false;
 
-  Serial.begin(9600);//Demarrage Serial
+  //Demarrage Serial
+  Serial.begin(9600);
   Serial.print("Connecting...");
+
+  //Demarrage GSM
+  gsm.begin(9600);
   delay(5000);
-
-  gsm.begin(9600);//Demarrage GSM
-
   Serial.println("Connected");
 
+  //Config GSM
   gsm.print("AT+CREG?\r\n");
   delay(1000);
   gsm.print("AT+CMGF=1\r\n");
@@ -138,6 +147,7 @@ void setup()
   }
 
   consigne = eepromReadSavedConsigne(); //Récupération de la consigne enregistrée
+
   sendStatus(); //Envoie un SMS avec le statut
 }
 
@@ -146,19 +156,17 @@ void loop()
 {
   //Recevoir et traiter les sms
   receiveSMS();
-
   //Fonction de chauffage
   heatingProcess();
-
   //Attente paquet du thermostat, timout 8000 ms
   listen(THERMOSTAT_LISTENING_TIME);
-
   //Vérifier le ping timeout, le niveau de batterie, envoie des alertes.
-  checkThermostat();
+  checkThermometer();
 }
 
 /*FUNCTIONS*******************************************************************/
 
+//Permet de traiter la réception de sms, récupère le texte du message.
 void receiveSMS()
 {
   if (gsm.available() > 0) 
@@ -196,10 +204,11 @@ void receiveSMS()
   }
 }
 
+//Déconnecte du réseau commun, puis connecte sur l'individuel
 void switchToIndividual()
 {
   digitalWrite(RELAYS_COMMON, HIGH); // Déconnecter le commun
-  delay(200);
+  delay(ELEC_NETWORK_SWITCHING_TIME);
   digitalWrite(RELAYS_PERSO, HIGH); // Connecter le perso
   heating = ENABLED;
   if (DEBUG) {
@@ -207,10 +216,11 @@ void switchToIndividual()
   }
 }
 
+//Déconnecte du réseau individuel, puis connecte le réseau commun
 void activateCommon() 
 {
   digitalWrite(RELAYS_COMMON, LOW); // Déconnecter le perso
-  delay(200);
+  delay(ELEC_NETWORK_SWITCHING_TIME);
   digitalWrite(RELAYS_PERSO, LOW); // Connecter le commun
   heating = DISABLED;
   if (DEBUG) 
@@ -219,6 +229,7 @@ void activateCommon()
   }
 }
 
+//Fonction qui gère les conditions de chauffe du
 void heatingProcess() {
   int bijunction = getBijunctionState();
 
@@ -228,11 +239,8 @@ void heatingProcess() {
     // Si le chauffage est en cours sur le perso, il faut le couper
     switchToCommon();
     currentBijunctionState = ENABLED;
-  }
-  
-  //Bascule en mode auto en cas de programme lancé
-  else if ((bijunction == DISABLED) && (currentBijunctionState == DISABLED) && (program == ENABLED) ) 
-  {
+  } else if ((bijunction == DISABLED) && (currentBijunctionState == DISABLED) && (program == ENABLED) ) 
+  {//Bascule en mode auto en cas de programme lancé
     heatingProg();
   }
 
@@ -256,7 +264,8 @@ void heatingProcess() {
   }
 }
 
-void checkThermostat() 
+//Met à jour le compteur de temps depuis le dernier contact avec le thermometre, envoie les aletres en cas de batterie faible
+void checkThermometer() 
 {
   // Mise à jour du chrono
   lastRefresh = (int)((millis() - lastTempMeasureMillis) / 60000);
@@ -288,6 +297,7 @@ void checkThermostat()
     }
 }
 
+//Ecoute pendant le TIMEOUT si on reçoit une trame du thermometre, puis enregistre les valeurs si trame reçue
 void listen(int timeout) 
 {
   vw_wait_rx_max(timeout);
@@ -311,6 +321,7 @@ void listen(int timeout)
    }
  }
 
+//Traite le contenu du sms et effectue les actions en fonctions
 void readSMS(String textMessage) 
 {
   const char* commandList[] = {"Ron", "Roff", "Status", "Progon", "Progoff", "Consigne"};
@@ -328,33 +339,34 @@ void readSMS(String textMessage)
   switch (command) 
   {
     case 0: // Ron
-    turnOn();
-    break;
+      turnOn();
+      break;
     case 1: // Roff
-    turnOff();
-    break;
+      turnOff();
+      break;
     case 2: // Status
-    sendStatus();
-    break;
+      sendStatus();
+      break;
     case 3: // Progon
-    program = ENABLED;
-    sendMessage("Programme actif");
-    digitalWrite(LED_PIN, HIGH);
-    break;
+      program = ENABLED;
+      sendMessage("Programme actif");
+      digitalWrite(LED_PIN, HIGH);
+      break;
     case 4: // Progoff
-    program = DISABLED;
-    sendMessage("Programme inactif");
-    digitalWrite(LED_PIN, LOW);
-    turnOff();
-    break;
+      program = DISABLED;
+      sendMessage("Programme inactif");
+      digitalWrite(LED_PIN, LOW);
+      turnOff();
+      break;
     case 5: // Consigne
-    setConsigne(textMessage, index);
-    break;
+      setConsigne(textMessage, index);
+      break;
     default:
-    break;
+      break;
   }
 }
 
+//Envoie par sms le paramètre de la fonction
 void sendMessage(String message) 
 {//Envoi du "Message" par sms
 gsm.print("AT+CMGS=\"");
@@ -365,6 +377,7 @@ gsm.print(message);
 gsm.write( 0x1a ); //Permet l'envoi du sms
 }
 
+//Récupère la data consigne dans le sms et l'enregistre dans le DS3231
 void setConsigne(String message, int indexConsigne) 
 {//Réglage de la consigne contenue dans le message à l'indexConsigne
 newConsigne = message.substring(indexConsigne + 9, message.length()).toFloat(); // On extrait la valeur et on la cast en float // 9 = "Consigne ".length()
@@ -397,20 +410,22 @@ if (DEBUG)
 }
 }
 
+//Analyse la temperature actuelle et la compare à la consigne, demande la chauffe en cas de besoin
 void heatingProg()
 {//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
   if ((temperature < (consigne - 0.5*hysteresis)) && (heating == DISABLED)) 
   {
     //Activer le chauffage par le perso
-    forcedHeating = ENABLED; //TODO: à tester 
+    forcedHeating = ENABLED;
   }
   if ((temperature > (consigne + 0.5*hysteresis)) && (heating == ENABLED))
   {
     //Désactiver le chauffage par le perso
-    forcedHeating = DISABLED; //TODO: à tester 
+    forcedHeating = DISABLED; 
   }
 }
 
+//Allume le radiateur en mode marche forcée
 void turnOn() 
 {//allumage du radiateur si pas de consigne et envoi de SMS
   gsm.print("AT+CMGS=\"");
@@ -429,6 +444,7 @@ void turnOn()
   gsm.write( 0x1a ); //Permet l'envoi du sms
 }
 
+//Efface l'état de marche forcée
 void turnOff() 
 {//Extinction du rad si pas de consigne et envoie de SMS
   gsm.print("AT+CMGS=\"");
@@ -594,6 +610,7 @@ float eepromReadSavedConsigne()
   return value.toFloat();
 }
 
+//Récupère l'état de présence d'électricité sur le réseau commun
 int getBijunctionState() 
 {
   return (digitalRead(BIJUNCTION_PIN) ? DISABLED : ENABLED);
