@@ -9,6 +9,7 @@
 #include <VirtualWire.h> //Lib for wireless
 
 // Liste des fonctions
+void receiveSMS();
 void readSMS(String message);
 void sendMessage(String message);
 void setConsigne(String message, int indexConsigne);
@@ -143,6 +144,23 @@ void setup()
 /*LOOP************************************************************************/
 void loop() 
 {
+  //Recevoir et traiter les sms
+  receiveSMS();
+
+  //Fonction de chauffage
+  heatingProcess();
+
+  //Attente paquet du thermostat, timout 8000 ms
+  listen(THERMOSTAT_LISTENING_TIME);
+
+  //Vérifier le ping timeout, le niveau de batterie, envoie des alertes.
+  checkThermostat();
+}
+
+/*FUNCTIONS*******************************************************************/
+
+void receiveSMS()
+{
   if (gsm.available() > 0) 
   {
     textMessage = gsm.readString();
@@ -152,43 +170,31 @@ void loop()
     }
     //Cas nominal avec le numéro de tel par défaut
     if ( (textMessage.indexOf(phoneNumber)) < 10 && textMessage.indexOf(phoneNumber) > 0) 
-    { // SMS arrived
-      readSMS(textMessage);
-    }
-    //Permet de prendre la main pour le controle du système
-    else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0) 
     {
-      int indexOfPhoneNumber = textMessage.indexOf("+",5);
-      int finalIndexOfPhoneNumber = textMessage.indexOf("\"", indexOfPhoneNumber);
-      String newPhoneNumber = textMessage.substring(indexOfPhoneNumber,finalIndexOfPhoneNumber);
-      String information = "Nouveau numero enregistre : ";
-      information.concat(newPhoneNumber);
-      sendMessage(information);
-      phoneNumber=newPhoneNumber;
-      if (DEBUG) 
-      {
-        Serial.print("First index : ");
-        Serial.println(indexOfPhoneNumber);
-        Serial.print("Last index : ");
-        Serial.println(finalIndexOfPhoneNumber);
-        Serial.print("New Phone number : ");
-        Serial.println(phoneNumber);
-      }
       readSMS(textMessage);
-    }
+    } 
+    else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0)
+    {
+        int indexOfPhoneNumber = textMessage.indexOf("+",5);
+        int finalIndexOfPhoneNumber = textMessage.indexOf("\"", indexOfPhoneNumber);
+        String newPhoneNumber = textMessage.substring(indexOfPhoneNumber,finalIndexOfPhoneNumber);
+        String information = "Nouveau numero enregistre : ";
+        information.concat(newPhoneNumber);
+        sendMessage(information);
+        phoneNumber=newPhoneNumber;
+        if (DEBUG) 
+        {
+          Serial.print("First index : ");
+          Serial.println(indexOfPhoneNumber);
+          Serial.print("Last index : ");
+          Serial.println(finalIndexOfPhoneNumber);
+          Serial.print("New Phone number : ");
+          Serial.println(phoneNumber);
+        }
+              readSMS(textMessage);
+      }
   }
-
-  //Vérifier le ping timeout, le niveau de batterie, envoie des alertes.
-  checkThermostat();
-
-  //Fonction de chauffage
-  heatingProcess();
-
-  //Attente paquet du thermostat, timout 8000 ms
-  listen(THERMOSTAT_LISTENING_TIME);
 }
-
-/*FUNCTIONS*******************************************************************/
 
 void switchToIndividual()
 {
@@ -577,7 +583,7 @@ float eepromReadSavedConsigne()
     int b = i2c_eeprom_read_byte(0x57, i); //access an address from the memory
     value += char(b);
   }
-  if (0) 
+  if (DEBUG) 
   {
     Serial.print("**DEBUG :: eepromReadSavedConsigne()");
     Serial.print("\tRead value: "); //ATTENTION : le 18/5/19 ce message provoquait une erreur quand il était plus long
