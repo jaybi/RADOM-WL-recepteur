@@ -175,23 +175,23 @@ void receiveSMS()
     } 
     else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0)
     {
-        int indexOfPhoneNumber = textMessage.indexOf("+",5);
-        int finalIndexOfPhoneNumber = textMessage.indexOf("\"", indexOfPhoneNumber);
-        String newPhoneNumber = textMessage.substring(indexOfPhoneNumber,finalIndexOfPhoneNumber);
-        String information = "Nouveau numero enregistre : ";
-        information.concat(newPhoneNumber);
-        sendMessage(information);
-        phoneNumber=newPhoneNumber;
-        if (DEBUG) 
-        {
-          Serial.print("First index : ");
-          Serial.println(indexOfPhoneNumber);
-          Serial.print("Last index : ");
-          Serial.println(finalIndexOfPhoneNumber);
-          Serial.print("New Phone number : ");
-          Serial.println(phoneNumber);
-        }
-              readSMS(textMessage);
+      int indexOfPhoneNumber = textMessage.indexOf("+",5);
+      int finalIndexOfPhoneNumber = textMessage.indexOf("\"", indexOfPhoneNumber);
+      String newPhoneNumber = textMessage.substring(indexOfPhoneNumber,finalIndexOfPhoneNumber);
+      String information = "Nouveau numero enregistre : ";
+      information.concat(newPhoneNumber);
+      sendMessage(information);
+      phoneNumber=newPhoneNumber;
+      if (DEBUG) 
+      {
+        Serial.print("First index : ");
+        Serial.println(indexOfPhoneNumber);
+        Serial.print("Last index : ");
+        Serial.println(finalIndexOfPhoneNumber);
+        Serial.print("New Phone number : ");
+        Serial.println(phoneNumber);
+      }
+      readSMS(textMessage);
       }
   }
 }
@@ -229,13 +229,15 @@ void heatingProcess() {
     switchToCommon();
     currentBijunctionState = ENABLED;
   }
+  
   //Bascule en mode auto en cas de programme lancé
   else if ((bijunction == DISABLED) && (currentBijunctionState == DISABLED) && (program == ENABLED) ) 
   {
     heatingProg();
   }
+
   //Bascule en marche forcée 
-  else if ((bijunction == DISABLED) && (forcedHeating == ENABLED) && (heating == DISABLED)) 
+  if ((bijunction == DISABLED) && (forcedHeating == ENABLED) && (heating == DISABLED)) 
   {
     switchToIndividual();
   }
