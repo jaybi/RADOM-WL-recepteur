@@ -11,10 +11,9 @@
 //MODE DEBUG *************************************************************************************************
 //Permet d'afficher le mode débug dans la console
 //Beaucoup plus d'infos apparaissent
-#define DEBUG 1 // 0 pour désactivé et 1 pour activé
+#define DEBUG 0 // 0 pour désactivé et 1 pour activé
 
 // Liste des fonctions
-
 void receiveSMS();
 void readSMS(String message);
 void sendMessage(String message);
@@ -49,13 +48,13 @@ enum {
 #define RELAYS_PERSO 2 // Pin connectée au relai
 #define RELAYS_COMMON 3 // Pin de commandes des relais du commun
 #define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
-#define BIJUNCTION_PIN 7
+#define BIJUNCTION_PIN 4
 SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
 #define LED_PIN 13
 //pin 4,5 -> I2C DS3231
 
 //Variables de texte
-String textMessage;
+String textMessage = "";
 int index = 0;
 
 //Variables pour la gestion du temps
@@ -65,7 +64,7 @@ bool PM;
 //Pour le comptage du temps
 unsigned long lastTempMeasureMillis = 0;
 int lastRefresh = 0;
-#define THERMOSTAT_LISTENING_TIME 8000 // En millisecondes
+#define THERMOSTAT_LISTENING_TIME 200 // En millisecondes
 #define ELEC_NETWORK_SWITCHING_TIME 200
 
 //Variables de mémorisation d'état
@@ -110,9 +109,6 @@ String pinNumber = personalData.getPinNumber();
 /*SETUP************************************************************************/
 void setup() 
 {
-  //Start the I2C interface
-  Wire.begin();
-
   //Configuration des I/O
   pinMode(RELAYS_PERSO, OUTPUT);
   pinMode(RELAYS_COMMON, OUTPUT);
@@ -123,9 +119,21 @@ void setup()
 
   //Demarrage Serial
   Serial.begin(9600);
-  Serial.print("Connecting...");
+  
+  //Initialisation de la bibliothèque VirtualWire
+  Serial.print("Init Virtual Wire... ");
+  vw_set_rx_pin(RX_PIN);
+  vw_set_tx_pin(7);
+  vw_set_ptt_pin(8);
+  vw_setup(2000);
+  vw_rx_start(); // On peut maintenant recevoir des messages
+  Serial.println("Done");
+
+  //Start the I2C interface
+  Wire.begin();
 
   //Demarrage GSM
+  Serial.print("GSM Connecting...");
   gsm.begin(9600);
   delay(5000);
   Serial.println("Connected");
@@ -136,7 +144,7 @@ void setup()
   gsm.print("AT+CMGF=1\r\n");
   delay(1000);
   gsm.println("AT+CNMI=2,2,0,0,0\r\n"); //This command selects the procedure
-  delay(1000);                          //for message reception from the network.
+  delay(3000);                          //for message reception from the network.
   //gsm.println("AT+CMGD=4\r\n"); //Suppression des SMS
   //delay(1000);
 
@@ -151,12 +159,6 @@ void setup()
 
   consigne = eepromReadSavedConsigne(); //Récupération de la consigne enregistrée
 
-//TODO: debuguer cette partie qui bloque la réception de sms si active
-  // Initialisation de la bibliothèque VirtualWire
-  // vw_set_rx_pin(RX_PIN);
-  // vw_setup(2000);
-  // vw_rx_start(); // On peut maintenant recevoir des messages
-
   sendStatus(); //Envoie un SMS avec le statut
 }
 
@@ -165,12 +167,15 @@ void loop()
 {
   //Recevoir et traiter les sms
   receiveSMS();
+  
   //Fonction de chauffage
   heatingProcess();
-  //Attente paquet du thermostat, timout 8000 ms
-  //listen(THERMOSTAT_LISTENING_TIME);
+
+
+
   //Vérifier le ping timeout, le niveau de batterie, envoie des alertes.
-  //checkThermometer();
+  checkThermometer();
+  
 }
 
 /*FUNCTIONS*******************************************************************/
@@ -188,6 +193,7 @@ void receiveSMS()
     //Cas nominal avec le numéro de tel par défaut
     if ( (textMessage.indexOf(phoneNumber)) < 10 && textMessage.indexOf(phoneNumber) > 0) 
     {
+      Serial.println("Je rentre dans readMessage()");
       readSMS(textMessage);
     } 
     else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0)
@@ -307,6 +313,9 @@ void heatingProg(){//Vérification de le temp, comparaison avec la consigne, et 
 //Met à jour le compteur de temps depuis le dernier contact avec le thermometre, envoie les aletres en cas de batterie faible
 void checkThermometer() 
 {
+  //Attente paquet du thermostat, timout 8000 ms
+  listen(THERMOSTAT_LISTENING_TIME);
+
   // Mise à jour du chrono
   lastRefresh = (int)((millis() - lastTempMeasureMillis) / 60000);
 
@@ -367,6 +376,8 @@ void readSMS(String textMessage)
 {
   const char* commandList[] = {"Ron", "Roff", "Status", "Progon", "Progoff", "Consigne"};
   int command = -1;
+  Serial.println("Dans readMessage, textMessage vaut :");
+  Serial.println(textMessage);
 
   for(int i = 0; i<6; i++) 
   {
