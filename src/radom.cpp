@@ -11,7 +11,7 @@
 //MODE DEBUG *************************************************************************************************
 //Permet d'afficher le mode débug dans la console
 //Beaucoup plus d'infos apparaissent
-#define DEBUG 0 // 0 pour désactivé et 1 pour activé
+#define DEBUG 1 // 0 pour désactivé et 1 pour activé
 
 // Liste des fonctions
 
@@ -110,7 +110,7 @@ String pinNumber = personalData.getPinNumber();
 /*SETUP************************************************************************/
 void setup() 
 {
-  // Start the I2C interface
+  //Start the I2C interface
   Wire.begin();
 
   //Configuration des I/O
@@ -137,13 +137,8 @@ void setup()
   delay(1000);
   gsm.println("AT+CNMI=2,2,0,0,0\r\n"); //This command selects the procedure
   delay(1000);                          //for message reception from the network.
-  // gsm.println("AT+CMGD=4\r\n"); //Suppression des SMS
-  // delay(1000);
-
-  // Initialisation de la bibliothèque VirtualWire
-  vw_set_rx_pin(RX_PIN);
-  vw_setup(2000);
-  vw_rx_start(); // On peut maintenant recevoir des messages
+  //gsm.println("AT+CMGD=4\r\n"); //Suppression des SMS
+  //delay(1000);
 
   if(DEBUG) {// Test de la configuration du numéro de téléphone
     Serial.print("**DEBUG :: Phone number :");
@@ -156,6 +151,12 @@ void setup()
 
   consigne = eepromReadSavedConsigne(); //Récupération de la consigne enregistrée
 
+//TODO: debuguer cette partie qui bloque la réception de sms si active
+  // Initialisation de la bibliothèque VirtualWire
+  // vw_set_rx_pin(RX_PIN);
+  // vw_setup(2000);
+  // vw_rx_start(); // On peut maintenant recevoir des messages
+
   sendStatus(); //Envoie un SMS avec le statut
 }
 
@@ -167,9 +168,9 @@ void loop()
   //Fonction de chauffage
   heatingProcess();
   //Attente paquet du thermostat, timout 8000 ms
-  listen(THERMOSTAT_LISTENING_TIME);
+  //listen(THERMOSTAT_LISTENING_TIME);
   //Vérifier le ping timeout, le niveau de batterie, envoie des alertes.
-  checkThermometer();
+  //checkThermometer();
 }
 
 /*FUNCTIONS*******************************************************************/
@@ -216,9 +217,9 @@ void receiveSMS()
 void switchToIndividual(){
   if (currentSource != INDIVIDUAL) 
   {
-    digitalWrite(RELAYS_COMMON, LOW); // Déconnecter le commun
+    digitalWrite(RELAYS_COMMON, HIGH); // ouvrir le commun qui est NC à LOW
     delay(200);
-    digitalWrite(RELAYS_PERSO, HIGH); // Connecter le perso
+    digitalWrite(RELAYS_PERSO, HIGH); // fermer le perso
     currentSource = INDIVIDUAL;
   }
 }
@@ -227,9 +228,9 @@ void switchToIndividual(){
 void switchToCommon() {
   if (currentSource != COMMON) 
   {
-    digitalWrite(RELAYS_PERSO, LOW); // Déconnecter le perso
+    digitalWrite(RELAYS_PERSO, LOW); // ouvrir le perso, qui est NO à LOW
     delay(200);
-    digitalWrite(RELAYS_COMMON, HIGH); // Connecter le commun
+    digitalWrite(RELAYS_COMMON, LOW); // Connecter le commun
     currentSource = COMMON;
   }
 }
