@@ -342,7 +342,7 @@ void checkThermometer()
     if (!alertBatteryCriticalSent) {
       if (batteryLevel < 10) {
         alertBatteryCriticalSent = true;
-      sendMessage("Niveau de batterie critique.");
+        sendMessage("Niveau de batterie critique.");
       }
     }
 }
