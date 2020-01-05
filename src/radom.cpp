@@ -121,13 +121,11 @@ void setup()
   Serial.begin(9600);
   
   //Initialisation de la bibliothèque VirtualWire
-  Serial.print("Init Virtual Wire... ");
   vw_set_rx_pin(RX_PIN);
   vw_set_tx_pin(7);
   vw_set_ptt_pin(8);
   vw_setup(2000);
   vw_rx_start(); // On peut maintenant recevoir des messages
-  Serial.println("Done");
 
   //Start the I2C interface
   Wire.begin();
@@ -171,11 +169,8 @@ void loop()
   //Fonction de chauffage
   heatingProcess();
 
-
-
   //Vérifier le ping timeout, le niveau de batterie, envoie des alertes.
   checkThermometer();
-  
 }
 
 /*FUNCTIONS*******************************************************************/
@@ -193,7 +188,6 @@ void receiveSMS()
     //Cas nominal avec le numéro de tel par défaut
     if ( (textMessage.indexOf(phoneNumber)) < 10 && textMessage.indexOf(phoneNumber) > 0) 
     {
-      Serial.println("Je rentre dans readMessage()");
       readSMS(textMessage);
     } 
     else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0)
@@ -376,9 +370,6 @@ void readSMS(String textMessage)
 {
   const char* commandList[] = {"Ron", "Roff", "Status", "Progon", "Progoff", "Consigne"};
   int command = -1;
-  Serial.println("Dans readMessage, textMessage vaut :");
-  Serial.println(textMessage);
-
   for(int i = 0; i<6; i++) 
   {
     if (textMessage.indexOf(commandList[i]) > 0) 
@@ -434,34 +425,34 @@ gsm.write( 0x1a ); //Permet l'envoi du sms
 //Récupère la data consigne dans le sms et l'enregistre dans le DS3231
 void setConsigne(String message, int indexConsigne) 
 {//Réglage de la consigne contenue dans le message à l'indexConsigne
-newConsigne = message.substring(indexConsigne + 9, message.length()).toFloat(); // On extrait la valeur et on la cast en float // 9 = "Consigne ".length()
-Serial.print("nouvelle consigne :");
-Serial.println(newConsigne);
-if (!newConsigne) {// Gestion de l'erreur de lecture et remontée du bug
-if (DEBUG) 
-{
-  Serial.println("Impossible d'effectuer la conversion de la température String -> Float. Mauvais mot-clé? Mauvais index?");
-  Serial.print("indexConsigne = ");
-  Serial.println(indexConsigne);
-  Serial.print("consigne lenght (>0)= ");
-  Serial.println(message.length()- indexConsigne + 9);
-  Serial.print("newConsigne = ");
+  newConsigne = message.substring(indexConsigne + 9, message.length()).toFloat(); // On extrait la valeur et on la cast en float // 9 = "Consigne ".length()
+  Serial.print("nouvelle consigne :");
   Serial.println(newConsigne);
-} else 
-{
-  sendMessage("Erreur de lecture de la consigne envoyee");
-}
-} else if (consigne != newConsigne) 
-{ //Si tout se passe bien et la consigne est différente la consigne actuelle
-  consigne = newConsigne;
-  message = "La nouvelle consigne est de ";
-  message.concat(consigne);
-  sendMessage(message);
-  eepromWriteData(consigne);//Enregistrement dans l'EEPROM
-} else 
-{
-  sendMessage("Cette consigne est deja enregistree");
-}
+  if (!newConsigne) {// Gestion de l'erreur de lecture et remontée du bug
+    if (DEBUG) 
+    {
+      Serial.println("Impossible d'effectuer la conversion de la température String -> Float. Mauvais mot-clé? Mauvais index?");
+      Serial.print("indexConsigne = ");
+      Serial.println(indexConsigne);
+      Serial.print("consigne lenght (>0)= ");
+      Serial.println(message.length()- indexConsigne + 9);
+      Serial.print("newConsigne = ");
+      Serial.println(newConsigne);
+    } else 
+    {
+      sendMessage("Erreur de lecture de la consigne envoyee");
+    }
+  } else if (consigne != newConsigne) 
+  { //Si tout se passe bien et la consigne est différente la consigne actuelle
+    consigne = newConsigne;
+    message = "La nouvelle consigne est de ";
+    message.concat(consigne);
+    sendMessage(message);
+    eepromWriteData(consigne);//Enregistrement dans l'EEPROM
+  } else 
+  {
+    sendMessage("Cette consigne est deja enregistree");
+  }
 }
 
 //Allume le radiateur en mode marche forcée
@@ -529,45 +520,46 @@ String getDate()
   {
     Serial.print("**DEBUG :: getDate()\t");
     Serial.print("2");
-    if (Century) {      // Won't need this for 89 years.
-    Serial.print("1");
-  } else 
-  {
-    Serial.print("0");
-  }
-  Serial.print(Clock.getYear(), DEC);
-  Serial.print(' ');
-  Serial.print(Clock.getMonth(Century), DEC);
-  Serial.print(' ');
-  Serial.print(Clock.getDate(), DEC);
-  Serial.print(' ');
-  Serial.print(Clock.getDoW(), DEC);
-  Serial.print(' ');
-  Serial.print(Clock.getHour(h12, PM), DEC);
-  Serial.print(' ');
-  Serial.print(Clock.getMinute(), DEC);
-  Serial.print(' ');
-  Serial.print(Clock.getSecond(), DEC);
-  if (h12) 
-  {
-    if (PM) 
-    {
-      Serial.print(" PM ");
+    if (Century) 
+    {      // Won't need this for 89 years.
+      Serial.print("1");
     } else 
     {
-      Serial.print(" AM ");
+      Serial.print("0");
     }
-  } else 
-  {
-    Serial.println(" 24h ");
+    Serial.print(Clock.getYear(), DEC);
+    Serial.print(' ');
+    Serial.print(Clock.getMonth(Century), DEC);
+    Serial.print(' ');
+    Serial.print(Clock.getDate(), DEC);
+    Serial.print(' ');
+    Serial.print(Clock.getDoW(), DEC);
+    Serial.print(' ');
+    Serial.print(Clock.getHour(h12, PM), DEC);
+    Serial.print(' ');
+    Serial.print(Clock.getMinute(), DEC);
+    Serial.print(' ');
+    Serial.print(Clock.getSecond(), DEC);
+    if (h12) 
+    {
+      if (PM) 
+      {
+        Serial.print(" PM ");
+      } else 
+      {
+        Serial.print(" AM ");
+      }
+    } else 
+    {
+      Serial.println(" 24h ");
+    }
   }
-}
-return date;
+  return date;
 }
 
 //Envoie par SMS le statut
 void sendStatus() 
-{ //TODO: ajouter le niveau de batterie
+{
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
