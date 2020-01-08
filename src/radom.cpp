@@ -2,37 +2,14 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include <String.h>
-#include <DS3231.h>
 #include <Wire.h>
 #include <PersonalData.h>
-#include <EEPROM.h>//Lib AT24C32
 #include <VirtualWire.h> //Lib for wireless
+#include <DS3231.h>
 
-//MODE DEBUG *************************************************************************************************
-//Permet d'afficher le mode débug dans la console
-//Beaucoup plus d'infos apparaissent
-#define DEBUG 0 // 0 pour désactivé et 1 pour activé
-
-// Liste des fonctions
-void receiveSMS();
-void readSMS(String message);
-void sendMessage(String message);
-void setConsigne(String message, int indexConsigne);
-void heatingProg();
-void turnOn() ;
-void turnOff() ;
-String getDate() ;
-void sendStatus() ;
-void i2c_eeprom_write_byte( int deviceaddress, unsigned int eeaddress, byte data );
-byte i2c_eeprom_read_byte( int deviceaddress, unsigned int eeaddress );
-void eepromWriteData(float value);
-float eepromReadSavedConsigne();
-int getBijunctionState();
-void listen(int timeout);
-void checkThermometer();
-void heatingProcess();
-void switchToIndividual();
-void switchToCommon();
+#include "radom.h"
+#include "gsm.h"
+#include "eprom.h"
 
 //Enumerations
 enum {
@@ -49,9 +26,12 @@ enum {
 #define RELAYS_COMMON 3 // Pin de commandes des relais du commun
 #define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
 #define BIJUNCTION_PIN 4
-SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
 #define LED_PIN 13
 //pin 4,5 -> I2C DS3231
+SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
+
+//Variable de DEBUG
+extern const bool DEBUG;
 
 //Variables de texte
 String textMessage = "";
@@ -107,8 +87,7 @@ String phoneNumber = personalData.getPhoneNumber();
 String pinNumber = personalData.getPinNumber();
 
 /*SETUP************************************************************************/
-void setup() 
-{
+void setup() {
   //Configuration des I/O
   pinMode(RELAYS_PERSO, OUTPUT);
   pinMode(RELAYS_COMMON, OUTPUT);
@@ -128,23 +107,10 @@ void setup()
   vw_rx_start(); // On peut maintenant recevoir des messages
 
   //Start the I2C interface
-  Wire.begin();
+  initWire();
 
-  //Demarrage GSM
-  Serial.print("GSM Connecting...");
-  gsm.begin(9600);
-  delay(5000);
-  Serial.println("Connected");
-
-  //Config GSM
-  gsm.print("AT+CREG?\r\n");
-  delay(1000);
-  gsm.print("AT+CMGF=1\r\n");
-  delay(1000);
-  gsm.println("AT+CNMI=2,2,0,0,0\r\n"); //This command selects the procedure
-  delay(3000);                          //for message reception from the network.
-  //gsm.println("AT+CMGD=4\r\n"); //Suppression des SMS
-  //delay(1000);
+  //Init the GSM
+  initGSM(gsm);
 
   if(DEBUG) {// Test de la configuration du numéro de téléphone
     Serial.print("**DEBUG :: Phone number :");
@@ -161,10 +127,9 @@ void setup()
 }
 
 /*LOOP************************************************************************/
-void loop() 
-{
+void loop() {
   //Recevoir et traiter les sms
-  receiveSMS();
+  receiveSMS(gsm);
   
   //Fonction de chauffage
   heatingProcess();
@@ -175,43 +140,7 @@ void loop()
 
 /*FUNCTIONS*******************************************************************/
 
-//Permet de traiter la réception de sms, récupère le texte du message.
-void receiveSMS()
-{
-  if (gsm.available() > 0) 
-  {
-    textMessage = gsm.readString();
-    if (DEBUG) 
-    {
-      Serial.println(textMessage);
-    }
-    //Cas nominal avec le numéro de tel par défaut
-    if ( (textMessage.indexOf(phoneNumber)) < 10 && textMessage.indexOf(phoneNumber) > 0) 
-    {
-      readSMS(textMessage);
-    } 
-    else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0)
-    {
-      int indexOfPhoneNumber = textMessage.indexOf("+",5);
-      int finalIndexOfPhoneNumber = textMessage.indexOf("\"", indexOfPhoneNumber);
-      String newPhoneNumber = textMessage.substring(indexOfPhoneNumber,finalIndexOfPhoneNumber);
-      String information = "Nouveau numero enregistre : ";
-      information.concat(newPhoneNumber);
-      sendMessage(information);
-      phoneNumber=newPhoneNumber;
-      if (DEBUG) 
-      {
-        Serial.print("First index : ");
-        Serial.println(indexOfPhoneNumber);
-        Serial.print("Last index : ");
-        Serial.println(finalIndexOfPhoneNumber);
-        Serial.print("New Phone number : ");
-        Serial.println(phoneNumber);
-      }
-      readSMS(textMessage);
-      }
-  }
-}
+
 
 //Déconnecte du réseau commun, puis connecte sur l'individuel
 void switchToIndividual(){
@@ -247,9 +176,7 @@ void heatingProcess() {
   } 
   else if (!bijunction && program && !currentProgramState)
   {
-    currentProgramState = ENABLED;
-    
-    
+    currentProgramState = ENABLED; 
   } 
   else if (!bijunction && forcedHeating && !heating && !program)
   {
@@ -276,15 +203,13 @@ void heatingProcess() {
     switchToCommon();
     currentProgramState = DISABLED;
     heating = DISABLED;
-    if (forcedHeating) //Supprime le flag forcedHeating lors de l'arret de la programmation
-    {
+    if (forcedHeating){ //Supprime le flag forcedHeating lors de l'arret de la programmation
       forcedHeating = DISABLED; 
       heating = DISABLED;
     }
   } 
   //Pour désactiver une marche forcée
-  if (!forcedHeating && heating)
-  {
+  if (!forcedHeating && heating){
     heating = DISABLED;
     switchToCommon();
   }
@@ -292,12 +217,10 @@ void heatingProcess() {
 
 //Analyse la temperature actuelle et la compare à la consigne, demande la chauffe en cas de besoin
 void heatingProg(){//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
-  if ((temperature < (consigne - 0.5*hysteresis))) 
-  {
+  if ((temperature < (consigne - 0.5*hysteresis))) {
     switchToIndividual();
   }
-  if ((temperature > (consigne + 0.5*hysteresis))) 
-  {
+  if ((temperature > (consigne + 0.5*hysteresis))) {
     //Désactiver le chauffage par le perso
     switchToCommon();
   }
@@ -319,7 +242,7 @@ void checkThermometer()
         program = DISABLED; // Coupe la programmation pour empécher de rester en chauffe indéfiniement
         digitalWrite(LED_PIN, LOW); //Extinction de la led
         alertNoSignalSent = true; // Flag de message parti, ce flag empeche de pouvoir relancer un programme. Il faut redémarrer l'appareil
-        sendMessage("Plus de signal du thermostat.");
+        sendMessage(gsm, "Plus de signal du thermostat.");
       }
     }
   /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
@@ -327,7 +250,7 @@ void checkThermometer()
     if(!alertBatteryLowSent) {
       if (batteryLevel < 20) {
         alertBatteryLowSent = true;
-        sendMessage("Niveau de batterie faible.");
+        sendMessage(gsm, "Niveau de batterie faible.");
       }
     }
   /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
@@ -335,7 +258,7 @@ void checkThermometer()
     if (!alertBatteryCriticalSent) {
       if (batteryLevel < 10) {
         alertBatteryCriticalSent = true;
-        sendMessage("Niveau de batterie critique.");
+        sendMessage(gsm, "Niveau de batterie critique.");
       }
     }
 }
@@ -393,13 +316,13 @@ void readSMS(String textMessage)
       if (!alertNoSignalSent) //Empeche de relancer une programmation quand le thermometre n'a plus de batterie ou ne répond plus
       {
         program = ENABLED;
-        sendMessage("Programme actif");
+        sendMessage(gsm, "Programme actif");
         digitalWrite(LED_PIN, HIGH);
       }
       break;
     case 4: // Progoff
       program = DISABLED;
-      sendMessage("Programme inactif");
+      sendMessage(gsm, "Programme inactif");
       digitalWrite(LED_PIN, LOW);
       break;
     case 5: // Consigne
@@ -408,17 +331,6 @@ void readSMS(String textMessage)
     default:
       break;
   }
-}
-
-//Envoie par sms le paramètre de la fonction
-void sendMessage(String message) 
-{//Envoi du "Message" par sms
-gsm.print("AT+CMGS=\"");
-gsm.print(phoneNumber);
-gsm.println("\"");
-delay(500);
-gsm.print(message);
-gsm.write( 0x1a ); //Permet l'envoi du sms
 }
 
 //Récupère la data consigne dans le sms et l'enregistre dans le DS3231
@@ -437,20 +349,17 @@ void setConsigne(String message, int indexConsigne)
       Serial.println(message.length()- indexConsigne + 9);
       Serial.print("newConsigne = ");
       Serial.println(newConsigne);
-    } else 
-    {
-      sendMessage("Erreur de lecture de la consigne envoyee");
+    } else {
+      sendMessage(gsm, "Erreur de lecture de la consigne envoyee");
     }
-  } else if (consigne != newConsigne) 
-  { //Si tout se passe bien et la consigne est différente la consigne actuelle
+  } else if (consigne != newConsigne){ //Si tout se passe bien et la consigne est différente la consigne actuelle
     consigne = newConsigne;
     message = "La nouvelle consigne est de ";
     message.concat(consigne);
-    sendMessage(message);
+    sendMessage(gsm, message);
     eepromWriteData(consigne);//Enregistrement dans l'EEPROM
-  } else 
-  {
-    sendMessage("Cette consigne est deja enregistree");
+  } else {
+    sendMessage(gsm, "Cette consigne est deja enregistree");
   }
 }
 
@@ -461,11 +370,9 @@ void turnOn()
   gsm.print(phoneNumber);
   gsm.println("\"");
   delay(500);
-  if (program) 
-  {
+  if (program) {
     gsm.println("Le programme est toujours actif !!");
-  } else 
-  {
+  } else {
     // Turn on RELAYS_PERSO and save current state
     forcedHeating = ENABLED;
     gsm.println("Chauffage en marche.");
@@ -480,11 +387,9 @@ void turnOff()
   gsm.print(phoneNumber);
   gsm.println("\"");
   delay(500);
-  if (program) 
-  {
+  if (program) {
     gsm.println("Le programme est toujours actif !!");
-  } else 
-  {
+  } else {
     // Turn off RELAYS_PERSO and save current state
     gsm.println("Le chauffage est eteint.");
     forcedHeating = DISABLED;
@@ -493,8 +398,7 @@ void turnOff()
 }
 
 //Renvoie la date
-String getDate() 
-{
+String getDate() {
   //Ce code concatène dans "date" la date et l'heure courante
   //dans le format 20YY MM DD HH:MM:SS
   String date ="";
@@ -515,8 +419,7 @@ String getDate()
   //Ce code est exécuté si la variable DEBUG est a TRUE
   //Permet d'afficher dans la console la date et l'heure au format
   // YYYY MM DD w HH MM SS 24h
-  if (DEBUG) 
-  {
+  if (DEBUG) {
     Serial.print("**DEBUG :: getDate()\t");
     Serial.print("2");
     if (Century) 
@@ -539,17 +442,13 @@ String getDate()
     Serial.print(Clock.getMinute(), DEC);
     Serial.print(' ');
     Serial.print(Clock.getSecond(), DEC);
-    if (h12) 
-    {
-      if (PM) 
-      {
+    if (h12) {
+      if (PM) {
         Serial.print(" PM ");
-      } else 
-      {
+      } else {
         Serial.print(" AM ");
       }
-    } else 
-    {
+    } else {
       Serial.println(" 24h ");
     }
   }
@@ -557,8 +456,7 @@ String getDate()
 }
 
 //Envoie par SMS le statut
-void sendStatus() 
-{
+void sendStatus() {
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
@@ -578,71 +476,9 @@ void sendStatus()
   gsm.write( 0x1a );
 }
 
-//Ecrtiture par byte dans l'EEPROM
-void i2c_eeprom_write_byte( int deviceaddress, unsigned int eeaddress, byte data ) 
-{
-  int rdata = data;
-  Wire.beginTransmission(deviceaddress);
-  Wire.write((int)(eeaddress >> 8)); // MSB
-  Wire.write((int)(eeaddress & 0xFF)); // LSB
-  Wire.write(rdata);
-  Wire.endTransmission();
-}
-
-//Lecture par Byte dans l'EEPROM
-byte i2c_eeprom_read_byte( int deviceaddress, unsigned int eeaddress )
-{
-  byte rdata = 0xFF;
-  Wire.beginTransmission(deviceaddress);
-  Wire.write((int)(eeaddress >> 8)); // MSB
-  Wire.write((int)(eeaddress & 0xFF)); // LSB
-  Wire.endTransmission();
-  Wire.requestFrom(deviceaddress,1);
-  if (Wire.available()) rdata = Wire.read();
-  return rdata;
-}
-
-//Ecriture de la value dans l'EEPROM
-void eepromWriteData(float value) 
-{
-  String stringValue = String(value);
-  int valueLength = sizeof(stringValue);
-  if (valueLength < 32) { //A priori il existe une limite, voir dans AT24C32_examples
-    if (0) {// ATTENTION: génère une erreur quand actif
-      Serial.print("**DEBUG :: eepromWriteData()\t");
-      Serial.print("Longueur de la consigne : ");
-      Serial.println(valueLength-1);
-      Serial.print("Valeur de la consigne : ");
-      Serial.println(stringValue);
-    }
-    for (int i = 0; i < valueLength - 1; i++) { // -1 pour ne pas récupérer le \n de fin de string
-      i2c_eeprom_write_byte(0x57, i, stringValue[i]);
-      delay(10);
-    }
-  }
-}
-
-//Renvoie la valeur de la consigne lue dans l'EEPROM
-float eepromReadSavedConsigne() 
-{
-  String value;
-  for(int i=0;i<5;i++) // la valeur sera "normalement" toujours 5 pour une consigne
-  {
-    int b = i2c_eeprom_read_byte(0x57, i); //access an address from the memory
-    value += char(b);
-  }
-  if (DEBUG) 
-  {
-    Serial.print("**DEBUG :: eepromReadSavedConsigne()");
-    Serial.print("\tRead value: "); //ATTENTION : le 18/5/19 ce message provoquait une erreur quand il était plus long
-    Serial.println(value);
-  }
-  return value.toFloat();
-}
 
 //Récupère l'état de présence d'électricité sur le réseau commun
-int getBijunctionState() 
-{
+int getBijunctionState() {
   return (digitalRead(BIJUNCTION_PIN) ? DISABLED : ENABLED);
   //si le détecteur renvoie 1 (non présent), la fonction renvoie DISABLED (return 0)
   //Si le détecteur renvoie 0 (présent), la fonction renvoie ENABLED (return 1)
