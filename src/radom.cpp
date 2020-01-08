@@ -287,7 +287,6 @@ void heatingProcess() {
   {
     heating = DISABLED;
     switchToCommon();
-    Serial.println("3");
   }
 }
 
