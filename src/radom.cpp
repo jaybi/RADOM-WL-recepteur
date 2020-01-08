@@ -12,19 +12,27 @@
 #include "eprom.h"
 
 //Enumerations
-enum {
-  ENABLED = 1,
-  DISABLED = 0
+enum State
+{
+  ON = 1,
+  OFF = 0
 };
-enum {
+enum Source
+{
   INDIVIDUAL = 0,
   COMMON = 1
 };
+enum Mode
+{
+  BIJ_MODE = 1,
+  AUTO_MODE = 2,
+  MANUEL_MODE = 3
+};
 
 //Définition des pinouts
-#define RELAYS_PERSO 2 // Pin connectée au relai
+#define RELAYS_PERSO 2  // Pin connectée au relai
 #define RELAYS_COMMON 3 // Pin de commandes des relais du commun
-#define RX_PIN 6 //Renseigne la pinouille connectée au module radio 433MHz
+#define RX_PIN 6        //Renseigne la pinouille connectée au module radio 433MHz
 #define BIJUNCTION_PIN 4
 #define LED_PIN 13
 //pin 4,5 -> I2C DS3231
@@ -38,7 +46,7 @@ String textMessage = "";
 int index = 0;
 
 //Variables pour la gestion du temps
-bool Century=false;
+bool Century = false;
 bool h12;
 bool PM;
 //Pour le comptage du temps
@@ -48,17 +56,16 @@ int lastRefresh = 0;
 #define ELEC_NETWORK_SWITCHING_TIME 200
 
 //Variables de mémorisation d'état
-bool currentState = DISABLED; // Etat de présence précédent du secteur commun
-bool heating; // Variable d'état du relais (et du chauffage)
-bool program = DISABLED; // Programmation active ou non
-bool currentProgramState = DISABLED;
+bool forced_heating = OFF;
+bool forced_heating_state = OFF; // Variable d'état du relais (et du chauffage)
+bool program = OFF;              // Programmation active ou non
+bool program_state = OFF;
+bool bijunction_state = OFF; // Etat de présence précédent du secteur commun
+
+int currentSource = Source::COMMON;
 bool alertNoSignalSent = false;
 bool alertBatteryLowSent = false;
 bool alertBatteryCriticalSent = false;
-bool forcedHeating = false;
-bool currentBijunctionState = DISABLED; // Etat de présence précédent du secteur commun
-bool previousTempState;
-int currentSource = COMMON;
 
 //Programmation de la consigne de Programmation
 #define hysteresis 1.0
@@ -67,7 +74,8 @@ float newConsigne = 1.0;
 //const float temperatureOffset = 0.0; // pour corriger un éventuel offset de temps
 float temperature = 33.3; // température par défaut
 int batteryLevel = 101;
-struct ThermostatData{
+struct ThermostatData
+{
   float temp;
   int batt;
 };
@@ -87,18 +95,19 @@ String phoneNumber = personalData.getPhoneNumber();
 String pinNumber = personalData.getPinNumber();
 
 /*SETUP************************************************************************/
-void setup() {
+void setup()
+{
   //Configuration des I/O
   pinMode(RELAYS_PERSO, OUTPUT);
   pinMode(RELAYS_COMMON, OUTPUT);
   pinMode(BIJUNCTION_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(RELAYS_PERSO, LOW); // The current state of the RELAYS_PERSO is off NO, donc ne laisse pas passser
+  digitalWrite(RELAYS_PERSO, LOW);  // The current state of the RELAYS_PERSO is off NO, donc ne laisse pas passser
   digitalWrite(RELAYS_COMMON, LOW); // NC donc laisse passer au repos
 
   //Demarrage Serial
   Serial.begin(9600);
-  
+
   //Initialisation de la bibliothèque VirtualWire
   vw_set_rx_pin(RX_PIN);
   vw_set_tx_pin(7);
@@ -112,7 +121,8 @@ void setup() {
   //Init the GSM
   initGSM(gsm);
 
-  if(DEBUG) {// Test de la configuration du numéro de téléphone
+  if (DEBUG)
+  { // Test de la configuration du numéro de téléphone
     Serial.print("**DEBUG :: Phone number :");
     Serial.print(phoneNumber);
     Serial.println(".");
@@ -127,10 +137,11 @@ void setup() {
 }
 
 /*LOOP************************************************************************/
-void loop() {
+void loop()
+{
   //Recevoir et traiter les sms
   receiveSMS(gsm);
-  
+
   //Fonction de chauffage
   heatingProcess();
 
@@ -139,95 +150,97 @@ void loop() {
 }
 
 /*FUNCTIONS*******************************************************************/
-
-
-
 //Déconnecte du réseau commun, puis connecte sur l'individuel
-void switchToIndividual(){
-  if (currentSource != INDIVIDUAL) 
+void switchToIndividual()
+{
+  if (currentSource != Source::INDIVIDUAL)
   {
     digitalWrite(RELAYS_COMMON, HIGH); // ouvrir le commun qui est NC à LOW
     delay(200);
     digitalWrite(RELAYS_PERSO, HIGH); // fermer le perso
-    currentSource = INDIVIDUAL;
+    currentSource = Source::INDIVIDUAL;
   }
 }
 
 //Déconnecte du réseau individuel, puis connecte le réseau commun
-void switchToCommon() {
-  if (currentSource != COMMON) 
+void switchToCommon()
+{
+  if (currentSource != Source::COMMON)
   {
     digitalWrite(RELAYS_PERSO, LOW); // ouvrir le perso, qui est NO à LOW
     delay(200);
     digitalWrite(RELAYS_COMMON, LOW); // Connecter le commun
-    currentSource = COMMON;
+    currentSource = Source::COMMON;
   }
 }
 
 //Fonction qui gère les conditions de chauffe du
-void heatingProcess() {
+void heatingProcess()
+{
   int bijunction = getBijunctionState();
 
- //Pour activer
-  if (bijunction && !currentBijunctionState ) 
-  {
-    currentBijunctionState = ENABLED;
-    switchToCommon();
-  } 
-  else if (!bijunction && program && !currentProgramState)
-  {
-    currentProgramState = ENABLED; 
-  } 
-  else if (!bijunction && forcedHeating && !heating && !program)
-  {
-    switchToIndividual();
-    heating = ENABLED;
+  //Gestion des variables d'état à ACTIVATION
+  if (bijunction)
+  { // Si courant commun ON
+    if (!bijunction_state)
+    {                    // & si état précédent OFF
+      newMode(BIJ_MODE); // L'état est mis à jour
+      switchToCommon();  // On bascule sur le commun
+    }
   }
-  if (!bijunction && currentProgramState) 
-  {
-        heatingProg();
-  }
-
-  //Bascule si pendant une marche forcée, le commun devient présent puis absent
-  if (!bijunction && currentBijunctionState)
-  {
-    if (forcedHeating)
+  else if (program)
+  { // Sinon, si programe ON et état précédent OFF
+    heatingProg();
+    if (!program_state)
     {
+      newMode(AUTO_MODE);   // On active la gestion de la programmation
+      forced_heating = OFF; // On efface le flag de chauffage manuel forcé
+    }
+  }
+  else if (forced_heating)
+  {
+    if (!forced_heating_state)
+    {
+      newMode(AUTO_MODE); // On met à jour l'état
       switchToIndividual();
     }
-    currentBijunctionState = DISABLED;
   }
-  //Pour désactiver dans le cas d'un programme qui s'arrete
-  if (!program && currentProgramState)
+
+  //Gestion des variables d'état à la DESACTIVATION
+  if (!bijunction && bijunction_state)
   {
+    bijunction_state = OFF;
+  }
+
+  if (!program && program_state)
+  {
+    program_state = OFF;
     switchToCommon();
-    currentProgramState = DISABLED;
-    heating = DISABLED;
-    if (forcedHeating){ //Supprime le flag forcedHeating lors de l'arret de la programmation
-      forcedHeating = DISABLED; 
-      heating = DISABLED;
-    }
-  } 
-  //Pour désactiver une marche forcée
-  if (!forcedHeating && heating){
-    heating = DISABLED;
+  }
+
+  if (!forced_heating && forced_heating_state)
+  {
+    forced_heating_state = OFF;
     switchToCommon();
   }
 }
 
 //Analyse la temperature actuelle et la compare à la consigne, demande la chauffe en cas de besoin
-void heatingProg(){//Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
-  if ((temperature < (consigne - 0.5*hysteresis))) {
+void heatingProg()
+{ //Vérification de le temp, comparaison avec la consigne, et activation/désactivation en fonction
+  if ((temperature < (consigne - 0.5 * hysteresis)))
+  {
     switchToIndividual();
   }
-  if ((temperature > (consigne + 0.5*hysteresis))) {
+  if ((temperature > (consigne + 0.5 * hysteresis)))
+  {
     //Désactiver le chauffage par le perso
     switchToCommon();
   }
 }
 
 //Met à jour le compteur de temps depuis le dernier contact avec le thermometre, envoie les aletres en cas de batterie faible
-void checkThermometer() 
+void checkThermometer()
 {
   //Attente paquet du thermostat, timout 8000 ms
   listen(THERMOSTAT_LISTENING_TIME);
@@ -237,173 +250,197 @@ void checkThermometer()
 
   /*Permet d'envoyer un unique message (jusqu'au redémarrage) si le signal n'a pas
     été reçu depuis 30min*/
-    if (!alertNoSignalSent) {
-      if (lastRefresh > 30) {// si plus mis à jour depuis 30min désactivation de la prog
-        program = DISABLED; // Coupe la programmation pour empécher de rester en chauffe indéfiniement
-        digitalWrite(LED_PIN, LOW); //Extinction de la led
-        alertNoSignalSent = true; // Flag de message parti, ce flag empeche de pouvoir relancer un programme. Il faut redémarrer l'appareil
-        sendMessage(gsm, "Plus de signal du thermostat.");
-      }
+  if (!alertNoSignalSent)
+  {
+    if (lastRefresh > 30)
+    {                             // si plus mis à jour depuis 30min désactivation de la prog
+      program = OFF;              // Coupe la programmation pour empécher de rester en chauffe indéfiniement
+      digitalWrite(LED_PIN, LOW); //Extinction de la led
+      alertNoSignalSent = true;   // Flag de message parti, ce flag empeche de pouvoir relancer un programme. Il faut redémarrer l'appareil
+      sendMessage(gsm, "Plus de signal du thermostat.");
     }
+  }
   /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
   du termostat passs en dessous de 20°C*/
-    if(!alertBatteryLowSent) {
-      if (batteryLevel < 20) {
-        alertBatteryLowSent = true;
-        sendMessage(gsm, "Niveau de batterie faible.");
-      }
+  if (!alertBatteryLowSent)
+  {
+    if (batteryLevel < 20)
+    {
+      alertBatteryLowSent = true;
+      sendMessage(gsm, "Niveau de batterie faible.");
     }
+  }
   /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
     du termostat passs en dessous de 10 °C*/
-    if (!alertBatteryCriticalSent) {
-      if (batteryLevel < 10) {
-        alertBatteryCriticalSent = true;
-        sendMessage(gsm, "Niveau de batterie critique.");
-      }
+  if (!alertBatteryCriticalSent)
+  {
+    if (batteryLevel < 10)
+    {
+      alertBatteryCriticalSent = true;
+      sendMessage(gsm, "Niveau de batterie critique.");
     }
+  }
 }
 
 //Ecoute pendant le TIMEOUT si on reçoit une trame du thermometre, puis enregistre les valeurs si trame reçue
-void listen(int timeout) 
+void listen(int timeout)
 {
   vw_wait_rx_max(timeout);
-   // On copie le message, qu'il soit corrompu ou non
-   if (vw_have_message()) {//Si un message est pret a etre lu
-     if (vw_get_message((byte *) &receivedData, &messageSize)) { // Si non corrpompu
-       lastTempMeasureMillis = millis();
-       temperature = receivedData.temp;
-       batteryLevel = receivedData.batt;
-       if (DEBUG) {
-         Serial.print("Temp transmise : ");
-         Serial.println(temperature); // Affiche le message
-         Serial.print("Batt transmise : ");
-         Serial.println(batteryLevel);
-         Serial.println();
-       }
-     }
-     else if (DEBUG) {
-       Serial.println("Message du thermostat corrompu.");
-     }
-   }
- }
+  // On copie le message, qu'il soit corrompu ou non
+  if (vw_have_message())
+  { //Si un message est pret a etre lu
+    if (vw_get_message((byte *)&receivedData, &messageSize))
+    { // Si non corrpompu
+      lastTempMeasureMillis = millis();
+      temperature = receivedData.temp;
+      batteryLevel = receivedData.batt;
+      if (DEBUG)
+      {
+        Serial.print("Temp transmise : ");
+        Serial.println(temperature); // Affiche le message
+        Serial.print("Batt transmise : ");
+        Serial.println(batteryLevel);
+        Serial.println();
+      }
+    }
+    else if (DEBUG)
+    {
+      Serial.println("Message du thermostat corrompu.");
+    }
+  }
+}
 
 //Traite le contenu du sms et effectue les actions en fonctions
-void readSMS(String textMessage) 
+void readSMS(String textMessage)
 {
-  const char* commandList[] = {"Ron", "Roff", "Status", "Progon", "Progoff", "Consigne"};
+  const char *commandList[] = {"Ron", "Roff", "Status", "Progon", "Progoff", "Consigne"};
   int command = -1;
-  for(int i = 0; i<6; i++) 
+  for (int i = 0; i < 6; i++)
   {
-    if (textMessage.indexOf(commandList[i]) > 0) 
+    if (textMessage.indexOf(commandList[i]) > 0)
     {
       command = i;
       index = textMessage.indexOf(commandList[i]);
       break; //Permet de sortir du for des que le cas est validé
     }
   }
-  switch (command) 
+  switch (command)
   {
-    case 0: // Ron
-      turnOn();
-      break;
-    case 1: // Roff
-      turnOff();
-      break;
-    case 2: // Status
-      sendStatus();
-      break;
-    case 3: // Progon
-      if (!alertNoSignalSent) //Empeche de relancer une programmation quand le thermometre n'a plus de batterie ou ne répond plus
-      {
-        program = ENABLED;
-        sendMessage(gsm, "Programme actif");
-        digitalWrite(LED_PIN, HIGH);
-      }
-      break;
-    case 4: // Progoff
-      program = DISABLED;
-      sendMessage(gsm, "Programme inactif");
-      digitalWrite(LED_PIN, LOW);
-      break;
-    case 5: // Consigne
-      setConsigne(textMessage, index);
-      break;
-    default:
-      break;
+  case 0: // Ron
+    turnOn();
+    break;
+  case 1: // Roff
+    turnOff();
+    break;
+  case 2: // Status
+    sendStatus();
+    break;
+  case 3:                   // Progon
+    if (!alertNoSignalSent) //Empeche de relancer une programmation quand le thermometre n'a plus de batterie ou ne répond plus
+    {
+      program = ON;
+      sendMessage(gsm, "Programme actif");
+      digitalWrite(LED_PIN, HIGH);
+    }
+    break;
+  case 4: // Progoff
+    program = OFF;
+    sendMessage(gsm, "Programme inactif");
+    digitalWrite(LED_PIN, LOW);
+    break;
+  case 5: // Consigne
+    setConsigne(textMessage, index);
+    break;
+  default:
+    break;
   }
 }
 
 //Récupère la data consigne dans le sms et l'enregistre dans le DS3231
-void setConsigne(String message, int indexConsigne) 
-{//Réglage de la consigne contenue dans le message à l'indexConsigne
+void setConsigne(String message, int indexConsigne)
+{                                                                                 //Réglage de la consigne contenue dans le message à l'indexConsigne
   newConsigne = message.substring(indexConsigne + 9, message.length()).toFloat(); // On extrait la valeur et on la cast en float // 9 = "Consigne ".length()
   Serial.print("nouvelle consigne :");
   Serial.println(newConsigne);
-  if (!newConsigne) {// Gestion de l'erreur de lecture et remontée du bug
-    if (DEBUG) 
+  if (!newConsigne)
+  { // Gestion de l'erreur de lecture et remontée du bug
+    if (DEBUG)
     {
       Serial.println("Impossible d'effectuer la conversion de la température String -> Float. Mauvais mot-clé? Mauvais index?");
       Serial.print("indexConsigne = ");
       Serial.println(indexConsigne);
       Serial.print("consigne lenght (>0)= ");
-      Serial.println(message.length()- indexConsigne + 9);
+      Serial.println(message.length() - indexConsigne + 9);
       Serial.print("newConsigne = ");
       Serial.println(newConsigne);
-    } else {
+    }
+    else
+    {
       sendMessage(gsm, "Erreur de lecture de la consigne envoyee");
     }
-  } else if (consigne != newConsigne){ //Si tout se passe bien et la consigne est différente la consigne actuelle
+  }
+  else if (consigne != newConsigne)
+  { //Si tout se passe bien et la consigne est différente la consigne actuelle
     consigne = newConsigne;
     message = "La nouvelle consigne est de ";
     message.concat(consigne);
     sendMessage(gsm, message);
-    eepromWriteData(consigne);//Enregistrement dans l'EEPROM
-  } else {
+    eepromWriteData(consigne); //Enregistrement dans l'EEPROM
+  }
+  else
+  {
     sendMessage(gsm, "Cette consigne est deja enregistree");
   }
 }
 
 //Allume le radiateur en mode marche forcée
-void turnOn() 
-{//allumage du radiateur si pas de consigne et envoi de SMS
+void turnOn()
+{ //allumage du radiateur si pas de consigne et envoi de SMS
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
   delay(500);
-  if (program) {
+  if (program)
+  {
     gsm.println("Le programme est toujours actif !!");
-  } else {
+  }
+  else
+  {
     // Turn on RELAYS_PERSO and save current state
-    forcedHeating = ENABLED;
+    forced_heating = ON;
     gsm.println("Chauffage en marche.");
   }
-  gsm.write( 0x1a ); //Permet l'envoi du sms
+  gsm.write(0x1a); //Permet l'envoi du sms
 }
 
 //Efface l'état de marche forcée
-void turnOff() 
-{//Extinction du rad si pas de consigne et envoie de SMS
+void turnOff()
+{ //Extinction du rad si pas de consigne et envoie de SMS
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
   delay(500);
-  if (program) {
+  if (program)
+  {
     gsm.println("Le programme est toujours actif !!");
-  } else {
+  }
+  else
+  {
     // Turn off RELAYS_PERSO and save current state
     gsm.println("Le chauffage est eteint.");
-    forcedHeating = DISABLED;
-  } //Emet une alerte si le programme est toujours actif
-  gsm.write( 0x1a ); //Permet l'envoi du sms
+    forced_heating = OFF;
+  }                //Emet une alerte si le programme est toujours actif
+  gsm.write(0x1a); //Permet l'envoi du sms
 }
 
 //Renvoie la date
-String getDate() {
+String getDate()
+{
   //Ce code concatène dans "date" la date et l'heure courante
   //dans le format 20YY MM DD HH:MM:SS
-  String date ="";
-  date +="2";
-  date +="0";
+  String date = "";
+  date += "2";
+  date += "0";
   date += String(Clock.getYear());
   date += " ";
   date += String(Clock.getMonth(Century));
@@ -419,13 +456,15 @@ String getDate() {
   //Ce code est exécuté si la variable DEBUG est a TRUE
   //Permet d'afficher dans la console la date et l'heure au format
   // YYYY MM DD w HH MM SS 24h
-  if (DEBUG) {
+  if (DEBUG)
+  {
     Serial.print("**DEBUG :: getDate()\t");
     Serial.print("2");
-    if (Century) 
-    {      // Won't need this for 89 years.
+    if (Century)
+    { // Won't need this for 89 years.
       Serial.print("1");
-    } else 
+    }
+    else
     {
       Serial.print("0");
     }
@@ -442,13 +481,19 @@ String getDate() {
     Serial.print(Clock.getMinute(), DEC);
     Serial.print(' ');
     Serial.print(Clock.getSecond(), DEC);
-    if (h12) {
-      if (PM) {
+    if (h12)
+    {
+      if (PM)
+      {
         Serial.print(" PM ");
-      } else {
+      }
+      else
+      {
         Serial.print(" AM ");
       }
-    } else {
+    }
+    else
+    {
       Serial.println(" 24h ");
     }
   }
@@ -456,30 +501,55 @@ String getDate() {
 }
 
 //Envoie par SMS le statut
-void sendStatus() {
+void sendStatus()
+{
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
   gsm.println("\"");
   delay(500);
-  gsm.print("Le chauffage est actuellement ");
-  gsm.println(heating ? "ON" : "OFF"); // This is to show if the light is currently switched on or off
+  gsm.print("Mode : ");
+  gsm.println(program_state ? "AUTO" : "MANUEL");
+  gsm.print("Source : ");
+  gsm.println(currentSource ? "Commune" : "Indiv.");
   gsm.print("Temp: ");
   gsm.print(temperature);
-  gsm.print(" *C (");
+  gsm.print(" *C (il y a ");
   gsm.print(lastRefresh);
-  gsm.print(" min ago, batt: ");
+  gsm.print(" min, batt: ");
   gsm.print(batteryLevel);
   gsm.println("%)");
   gsm.print("Consigne: ");
   gsm.println(consigne);
   gsm.println(getDate());
-  gsm.write( 0x1a );
+  gsm.write(0x1a);
 }
 
-
 //Récupère l'état de présence d'électricité sur le réseau commun
-int getBijunctionState() {
-  return (digitalRead(BIJUNCTION_PIN) ? DISABLED : ENABLED);
-  //si le détecteur renvoie 1 (non présent), la fonction renvoie DISABLED (return 0)
-  //Si le détecteur renvoie 0 (présent), la fonction renvoie ENABLED (return 1)
+int getBijunctionState()
+{
+  return (digitalRead(BIJUNCTION_PIN) ? OFF : ON);
+  //si le détecteur renvoie 1 (non présent), la fonction renvoie OFF (return 0)
+  //Si le détecteur renvoie 0 (présent), la fonction renvoie ON (return 1)
+}
+
+void newMode(int mode)
+{
+  if (mode == BIJ_MODE)
+  {
+    bijunction_state = ON;
+    program_state = OFF;
+    forced_heating_state = OFF;
+  }
+  else if (mode == AUTO_MODE)
+  {
+    bijunction_state = OFF;
+    program_state = ON;
+    forced_heating_state = OFF;
+  }
+  else if (mode == MANUEL_MODE)
+  {
+    bijunction_state = OFF;
+    program_state = OFF;
+    forced_heating_state = ON;
+  }
 }
