@@ -1,7 +1,4 @@
 
 void initGSM(SoftwareSerial);
 void receiveSMS(SoftwareSerial);
-void sendMessage(SoftwareSerial,String);
-
-
-
+void sendMessage(SoftwareSerial, String);
