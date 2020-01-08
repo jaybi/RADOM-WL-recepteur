@@ -1,4 +1,3 @@
-
-void initGSM(SoftwareSerial);
-void receiveSMS(SoftwareSerial);
-void sendMessage(SoftwareSerial, String);
+void initGSM(SoftwareSerial &gsm);
+void sendMessage(Stream &gsm, String);
+void sendStatus(Stream &gsm);

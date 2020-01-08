@@ -36,7 +36,7 @@ enum Mode
 #define BIJUNCTION_PIN 4
 #define LED_PIN 13
 //pin 4,5 -> I2C DS3231
-SoftwareSerial gsm(10, 11); // Pins TX,RX du Arduino
+SoftwareSerial SIM800(10, 11); // Pins TX,RX du Arduino
 
 //Variable de DEBUG
 extern const bool DEBUG;
@@ -118,8 +118,8 @@ void setup()
   //Start the I2C interface
   initWire();
 
-  //Init the GSM
-  initGSM(gsm);
+  //Init the SIM800
+  initGSM(SIM800);
 
   if (DEBUG)
   { // Test de la configuration du numéro de téléphone
@@ -133,14 +133,14 @@ void setup()
 
   consigne = eepromReadSavedConsigne(); //Récupération de la consigne enregistrée
 
-  sendStatus(); //Envoie un SMS avec le statut
+  sendStatus(SIM800); //Envoie un SMS avec le statut
 }
 
 /*LOOP************************************************************************/
 void loop()
 {
   //Recevoir et traiter les sms
-  receiveSMS(gsm);
+  receiveSMS();
 
   //Fonction de chauffage
   heatingProcess();
@@ -201,7 +201,7 @@ void heatingProcess()
   {
     if (!forced_heating_state)
     {
-      newMode(AUTO_MODE); // On met à jour l'état
+      newMode(Mode::MANUEL_MODE); // On met à jour l'état
       switchToIndividual();
     }
   }
@@ -257,7 +257,7 @@ void checkThermometer()
       program = OFF;              // Coupe la programmation pour empécher de rester en chauffe indéfiniement
       digitalWrite(LED_PIN, LOW); //Extinction de la led
       alertNoSignalSent = true;   // Flag de message parti, ce flag empeche de pouvoir relancer un programme. Il faut redémarrer l'appareil
-      sendMessage(gsm, "Plus de signal du thermostat.");
+      sendMessage(SIM800, "Plus de signal du thermostat.");
     }
   }
   /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
@@ -267,7 +267,7 @@ void checkThermometer()
     if (batteryLevel < 20)
     {
       alertBatteryLowSent = true;
-      sendMessage(gsm, "Niveau de batterie faible.");
+      sendMessage(SIM800, "Niveau de batterie faible.");
     }
   }
   /*Permet d'envoyer un unique message jusqu'au redémarrage; si le niveau de batterie
@@ -277,7 +277,7 @@ void checkThermometer()
     if (batteryLevel < 10)
     {
       alertBatteryCriticalSent = true;
-      sendMessage(gsm, "Niveau de batterie critique.");
+      sendMessage(SIM800, "Niveau de batterie critique.");
     }
   }
 }
@@ -310,6 +310,44 @@ void listen(int timeout)
   }
 }
 
+//Permet de traiter la réception de sms, récupère le texte du message.
+void receiveSMS()
+{
+  if (SIM800.available() > 0)
+  {
+    textMessage = SIM800.readString();
+    if (DEBUG)
+    {
+      Serial.println(textMessage);
+    }
+    //Cas nominal avec le numéro de tel par défaut
+    if ((textMessage.indexOf(phoneNumber)) < 10 && textMessage.indexOf(phoneNumber) > 0)
+    {
+      readSMS(textMessage);
+    }
+    else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0)
+    {
+      int indexOfPhoneNumber = textMessage.indexOf("+", 5);
+      int finalIndexOfPhoneNumber = textMessage.indexOf("\"", indexOfPhoneNumber);
+      String newPhoneNumber = textMessage.substring(indexOfPhoneNumber, finalIndexOfPhoneNumber);
+      String information = "Nouveau numero enregistre : ";
+      information.concat(newPhoneNumber);
+      sendMessage(SIM800, information);
+      phoneNumber = newPhoneNumber;
+      if (DEBUG)
+      {
+        Serial.print("First index : ");
+        Serial.println(indexOfPhoneNumber);
+        Serial.print("Last index : ");
+        Serial.println(finalIndexOfPhoneNumber);
+        Serial.print("New Phone number : ");
+        Serial.println(phoneNumber);
+      }
+      readSMS(textMessage);
+    }
+  }
+}
+
 //Traite le contenu du sms et effectue les actions en fonctions
 void readSMS(String textMessage)
 {
@@ -333,19 +371,19 @@ void readSMS(String textMessage)
     turnOff();
     break;
   case 2: // Status
-    sendStatus();
+    sendStatus(SIM800);
     break;
   case 3:                   // Progon
     if (!alertNoSignalSent) //Empeche de relancer une programmation quand le thermometre n'a plus de batterie ou ne répond plus
     {
       program = ON;
-      sendMessage(gsm, "Programme actif");
+      sendMessage(SIM800, "Programme actif");
       digitalWrite(LED_PIN, HIGH);
     }
     break;
   case 4: // Progoff
     program = OFF;
-    sendMessage(gsm, "Programme inactif");
+    sendMessage(SIM800, "Programme inactif");
     digitalWrite(LED_PIN, LOW);
     break;
   case 5: // Consigne
@@ -376,7 +414,7 @@ void setConsigne(String message, int indexConsigne)
     }
     else
     {
-      sendMessage(gsm, "Erreur de lecture de la consigne envoyee");
+      sendMessage(SIM800, "Erreur de lecture de la consigne envoyee");
     }
   }
   else if (consigne != newConsigne)
@@ -384,53 +422,53 @@ void setConsigne(String message, int indexConsigne)
     consigne = newConsigne;
     message = "La nouvelle consigne est de ";
     message.concat(consigne);
-    sendMessage(gsm, message);
+    sendMessage(SIM800, message);
     eepromWriteData(consigne); //Enregistrement dans l'EEPROM
   }
   else
   {
-    sendMessage(gsm, "Cette consigne est deja enregistree");
+    sendMessage(SIM800, "Cette consigne est deja enregistree");
   }
 }
 
 //Allume le radiateur en mode marche forcée
 void turnOn()
 { //allumage du radiateur si pas de consigne et envoi de SMS
-  gsm.print("AT+CMGS=\"");
-  gsm.print(phoneNumber);
-  gsm.println("\"");
+  SIM800.print("AT+CMGS=\"");
+  SIM800.print(phoneNumber);
+  SIM800.println("\"");
   delay(500);
   if (program)
   {
-    gsm.println("Le programme est toujours actif !!");
+    SIM800.println("Le programme est toujours actif !!");
   }
   else
   {
     // Turn on RELAYS_PERSO and save current state
     forced_heating = ON;
-    gsm.println("Chauffage en marche.");
+    SIM800.println("Chauffage en marche.");
   }
-  gsm.write(0x1a); //Permet l'envoi du sms
+  SIM800.write(0x1a); //Permet l'envoi du sms
 }
 
 //Efface l'état de marche forcée
 void turnOff()
 { //Extinction du rad si pas de consigne et envoie de SMS
-  gsm.print("AT+CMGS=\"");
-  gsm.print(phoneNumber);
-  gsm.println("\"");
+  SIM800.print("AT+CMGS=\"");
+  SIM800.print(phoneNumber);
+  SIM800.println("\"");
   delay(500);
   if (program)
   {
-    gsm.println("Le programme est toujours actif !!");
+    SIM800.println("Le programme est toujours actif !!");
   }
   else
   {
     // Turn off RELAYS_PERSO and save current state
-    gsm.println("Le chauffage est eteint.");
+    SIM800.println("Le chauffage est eteint.");
     forced_heating = OFF;
-  }                //Emet une alerte si le programme est toujours actif
-  gsm.write(0x1a); //Permet l'envoi du sms
+  }                   //Emet une alerte si le programme est toujours actif
+  SIM800.write(0x1a); //Permet l'envoi du sms
 }
 
 //Renvoie la date
@@ -500,31 +538,7 @@ String getDate()
   return date;
 }
 
-//Envoie par SMS le statut
-void sendStatus()
-{
-  gsm.print("AT+CMGS=\"");
-  gsm.print(phoneNumber);
-  gsm.println("\"");
-  delay(500);
-  gsm.print("Mode : ");
-  gsm.println(program_state ? "AUTO" : "MANUEL");
-  gsm.print("Source : ");
-  gsm.println(currentSource ? "Commune" : "Indiv.");
-  gsm.print("Temp: ");
-  gsm.print(temperature);
-  gsm.print(" *C (il y a ");
-  gsm.print(lastRefresh);
-  gsm.print(" min, batt: ");
-  gsm.print(batteryLevel);
-  gsm.println("%)");
-  gsm.print("Consigne: ");
-  gsm.println(consigne);
-  gsm.println(getDate());
-  gsm.write(0x1a);
-}
-
-//Récupère l'état de présence d'électricité sur le réseau commun
+//Récupère l'état de présence d'électricité sur le réseau commun.
 int getBijunctionState()
 {
   return (digitalRead(BIJUNCTION_PIN) ? OFF : ON);
@@ -532,6 +546,9 @@ int getBijunctionState()
   //Si le détecteur renvoie 0 (présent), la fonction renvoie ON (return 1)
 }
 
+//Cette fonction permet de n'avoir qu'un seul mode
+//de fonctionnement actif en même temps.
+//Elle gère les variables d'état
 void newMode(int mode)
 {
   if (mode == BIJ_MODE)

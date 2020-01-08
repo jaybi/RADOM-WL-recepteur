@@ -9,18 +9,23 @@ extern PersonalData personalData;
 extern String phoneNumber;
 extern String pinNumber;
 extern String textMessage;
+extern bool program;
+extern int currentSource;
+extern float temperature;
+extern int lastRefresh;
+extern int batteryLevel;
+extern float consigne;
 extern const bool DEBUG;
 
-//Configure le SIM 800 L
-void initGSM(SoftwareSerial gsm)
+void initGSM(SoftwareSerial &gsm)
 {
-  //Demarrage GSM
-  Serial.print("GSM Connecting...");
+  //Demarrage gsm
+  Serial.print("SIM800 Connecting...");
   gsm.begin(9600);
   delay(5000);
   Serial.println("Connected");
 
-  //Config GSM
+  //Config gsm
   gsm.print("AT+CREG?\r\n");
   delay(1000);
   gsm.print("AT+CMGF=1\r\n");
@@ -31,46 +36,8 @@ void initGSM(SoftwareSerial gsm)
                                         //delay(1000);
 }
 
-//Permet de traiter la réception de sms, récupère le texte du message.
-void receiveSMS(SoftwareSerial gsm)
-{
-  if (gsm.available() > 0)
-  {
-    textMessage = gsm.readString();
-    if (DEBUG)
-    {
-      Serial.println(textMessage);
-    }
-    //Cas nominal avec le numéro de tel par défaut
-    if ((textMessage.indexOf(phoneNumber)) < 10 && textMessage.indexOf(phoneNumber) > 0)
-    {
-      readSMS(textMessage);
-    }
-    else if (textMessage.indexOf(pinNumber) < 51 && textMessage.indexOf(pinNumber) > 0)
-    {
-      int indexOfPhoneNumber = textMessage.indexOf("+", 5);
-      int finalIndexOfPhoneNumber = textMessage.indexOf("\"", indexOfPhoneNumber);
-      String newPhoneNumber = textMessage.substring(indexOfPhoneNumber, finalIndexOfPhoneNumber);
-      String information = "Nouveau numero enregistre : ";
-      information.concat(newPhoneNumber);
-      sendMessage(gsm, information);
-      phoneNumber = newPhoneNumber;
-      if (DEBUG)
-      {
-        Serial.print("First index : ");
-        Serial.println(indexOfPhoneNumber);
-        Serial.print("Last index : ");
-        Serial.println(finalIndexOfPhoneNumber);
-        Serial.print("New Phone number : ");
-        Serial.println(phoneNumber);
-      }
-      readSMS(textMessage);
-    }
-  }
-}
-
 //Envoie par sms le paramètre de la fonction
-void sendMessage(SoftwareSerial gsm, String message)
+void sendMessage(Stream &gsm, String message)
 { //Envoi du "Message" par sms
   gsm.print("AT+CMGS=\"");
   gsm.print(phoneNumber);
@@ -78,4 +45,28 @@ void sendMessage(SoftwareSerial gsm, String message)
   delay(500);
   gsm.print(message);
   gsm.write(0x1a); //Permet l'envoi du sms
+}
+
+//Envoie par SMS le statut
+void sendStatus(Stream &gsm)
+{
+  gsm.print("AT+CMGS=\"");
+  gsm.print(phoneNumber);
+  gsm.println("\"");
+  delay(500);
+  gsm.print("Mode : ");
+  gsm.println(program ? "AUTO" : "MANUEL");
+  gsm.print("Source : ");
+  gsm.println(currentSource ? "Commune" : "Indiv.");
+  gsm.print("Temp: ");
+  gsm.print(temperature);
+  gsm.print(" *C (il y a ");
+  gsm.print(lastRefresh);
+  gsm.print(" min, batt: ");
+  gsm.print(batteryLevel);
+  gsm.println("%)");
+  gsm.print("Consigne: ");
+  gsm.println(consigne);
+  gsm.println(getDate());
+  gsm.write(0x1a);
 }

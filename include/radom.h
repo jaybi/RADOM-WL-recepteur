@@ -5,12 +5,12 @@ const bool DEBUG = 0; // 0 pour désactivé et 1 pour activé
 
 // Liste des fonctions
 void readSMS(String);
+void receiveSMS();
 void setConsigne(String, int);
 void heatingProg();
 void turnOn();
 void turnOff();
 String getDate();
-void sendStatus();
 int getBijunctionState();
 void listen(int);
 void checkThermometer();
