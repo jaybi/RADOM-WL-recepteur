@@ -71,8 +71,8 @@ bool alertBatteryCriticalSent = false;
 #define hysteresis 1.0
 float consigne;
 float newConsigne = 1.0;
-//const float temperatureOffset = 0.0; // pour corriger un éventuel offset de temps
-float temperature = 33.3; // température par défaut
+const float temperatureOffset = 1.3; // pour corriger un éventuel offset de temps
+float temperature = 33.3;            // température par défaut
 int batteryLevel = 101;
 struct ThermostatData
 {
@@ -292,7 +292,7 @@ void listen(int timeout)
     if (vw_get_message((byte *)&receivedData, &messageSize))
     { // Si non corrpompu
       lastTempMeasureMillis = millis();
-      temperature = receivedData.temp;
+      temperature = receivedData.temp + temperatureOffset;
       batteryLevel = receivedData.batt;
       if (DEBUG)
       {
